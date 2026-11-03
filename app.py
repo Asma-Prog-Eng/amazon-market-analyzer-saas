@@ -97,6 +97,14 @@ def fetch_history():
     except Exception as e:
         return []
 
+def clean_html_tags(text: str) -> str:
+    """Replaces HTML break tags with proper newlines for clean rendering."""
+    if not text:
+        return ""
+    text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=KIND_IGNORECASE := re.IGNORECASE)
+    text = re.sub(r'</?\s*(?!b|i|u)\w+\b[^>]*>', '', text)
+    return text
+
 def clean_for_reportlab(text: str) -> str:
     """Sanitizes text, strips LaTeX math notation, and normalizes characters for ReportLab PDF compatibility."""
     if not text:
@@ -267,7 +275,7 @@ Follow the table with a few short bullet points for Quick Action Steps. Avoid La
     return {"analysis": state.analysis}
 
 def node_social_trend_analyst(state: AgentState) -> dict:
-    """Node 4: Evaluates social media momentum (TikTok, IG, Snapchat, Reddit) for the target market."""
+    """Node 4: Evaluates social media momentum (TikTok, IG, Snapchat, Reddit) using clean text/bullets ONLY."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     prompt = f"""You are a Senior Social Media Trend Analyst and Viral Content Strategist specializing in e-commerce product discovery for **{state.target_market}**.
@@ -275,15 +283,21 @@ Product Analyzed: '{state.analysis.product_name}'
 Product Pros: {', '.join(state.analysis.pros)}
 Product Cons: {', '.join(state.analysis.cons)}
 
-Provide a structured Viral & Social Media Blueprint tailored specifically for **{state.target_market}**. Use clean bullet lists and markdown headings (NO HTML tags, NO Markdown tables):
+Provide a structured Viral & Social Media Blueprint tailored specifically for **{state.target_market}**. 
 
+STRICT FORMATTING RULES:
+- DO NOT use any Markdown tables (`| ... |`).
+- DO NOT use raw HTML tags like `<br>` or `<br/>`. Use standard line breaks.
+- Use clear headings and bullet points (`*` or `-`).
+
+Include:
 1. **Target Platform Priority**: Rank platforms (TikTok, Instagram, Snapchat, Reddit) based on user demographics and buying behavior in {state.target_market}.
-2. **Top 3 Viral Video Hooks**: Write 3 high-converting 3-second video opening hooks/scripts (e.g., "Stop doing X...", "If you have [Problem] watch this...", "Amazon find that solved X").
+2. **Top 3 Viral Video Hooks**: Write 3 high-converting 3-second video opening hooks/scripts.
 3. **Hashtag & Keyword Strategy**: Suggest 5-6 top performing search terms/hashtags for TikTok Search & Meta Ad Library.
 4. **Community Sentiment Insights**: Highlight what users in subreddits or comment sections typically look for regarding this product category.
 """
     res = llm.invoke(prompt)
-    state.analysis.social_trends = res.content
+    state.analysis.social_trends = clean_html_tags(res.content)
     return {"analysis": state.analysis}
 
 def node_sourcing_finder(state: AgentState) -> dict:
@@ -301,7 +315,7 @@ Provide an actionable Sourcing & Manufacturing Blueprint structured with clean m
 3. **Vetting & Sample Checklist**: Key questions to ask suppliers regarding Trade Assurance, sample testing, and quality control.
 """
     res = llm.invoke(prompt)
-    state.analysis.sourcing_info = res.content
+    state.analysis.sourcing_info = clean_html_tags(res.content)
     return {"analysis": state.analysis}
 
 def build_workflow():
@@ -463,7 +477,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
     elif not search_query.strip():
         st.warning("Please enter a product search query.")
     else:
-        with st.spinner(f"Executing 5-Node Agent Workflow for {target_market} (Scraper -> Analyzer -> Strategist -> Social Trends -> Sourcing)..."):
+        with st.spinner(f"Executing 5-Node Agent Workflow for {target_market}..."):
             try:
                 graph = build_workflow()
                 initial_state = AgentState(search_query=search_query, target_market=target_market)
@@ -473,7 +487,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
                 st.session_state["target_market"] = target_market
-                st.success(f"Analysis for {target_market} complete, social trends mapped, and archived!")
+                st.success(f"Analysis for {target_market} complete and archived!")
                 
             except Exception as e:
                 st.error(f"Error executing agent workflow: {str(e)}")
