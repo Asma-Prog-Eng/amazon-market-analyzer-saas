@@ -25,12 +25,13 @@ from reportlab.lib import colors
 DB_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL", ""))
 
 def init_db():
-    """Initializes PostgreSQL database table for report history with viability metrics."""
+    """Initializes PostgreSQL database table and safely adds missing columns if needed."""
     if not DB_URL:
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
+        # Create base table if it doesn't exist at all
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY,
@@ -40,11 +41,13 @@ def init_db():
                 pros TEXT,
                 cons TEXT,
                 recommendation TEXT,
-                pricing_strategy TEXT,
-                viability_score INT,
-                is_winning_product BOOLEAN
+                pricing_strategy TEXT
             )
         """)
+        # Safely add new columns if upgrading an existing table
+        cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS viability_score INT;")
+        cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_winning_product BOOLEAN;")
+        
         conn.commit()
         cursor.close()
         conn.close()
