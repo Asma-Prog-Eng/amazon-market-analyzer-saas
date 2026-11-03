@@ -101,7 +101,7 @@ def clean_html_tags(text: str) -> str:
     """Replaces HTML break tags with proper newlines for clean rendering."""
     if not text:
         return ""
-    text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=KIND_IGNORECASE := re.IGNORECASE)
+    text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</?\s*(?!b|i|u)\w+\b[^>]*>', '', text)
     return text
 
