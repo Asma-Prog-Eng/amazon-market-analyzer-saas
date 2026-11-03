@@ -14,8 +14,9 @@ from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 
 # ==========================================
@@ -73,9 +74,11 @@ def clean_for_reportlab(text: str) -> str:
     """Sanitizes text for ReportLab Paragraph XML parsing."""
     if not text:
         return ""
+    # Replace markdown bold **text** with ReportLab XML <b>text</b>
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     # Replace any form of <br> with strict ReportLab self-closing <br/>
     text = re.sub(r'<\s*br\s*/?\s*>', '<br/>', text, flags=re.IGNORECASE)
-    # Strip unsupported HTML tags, keeping only safe formatting tags like b, i, u
+    # Strip unsupported HTML tags, keeping only safe formatting tags
     text = re.sub(r'</?\s*(?!b|i|u|br)\w+\b[^>]*>', '', text, flags=re.IGNORECASE)
     # Escape standalone bare ampersands
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
@@ -151,14 +154,8 @@ Review the market analysis below for product '{state.analysis.product_name}' (Pr
 Existing Pros: {', '.join(state.analysis.pros)}
 Existing Cons: {', '.join(state.analysis.cons)}
 
-Write a comprehensive, professional pricing & margin strategy. Include:
-- Recommended base list price & target gross margin %
-- Tiered quantity discount structure
-- Seasonal or promotional discount recommendations
-- Upsell / bundling recommendations to boost average order value
-- Clear, bulleted quick action steps
-
-Do not use unclosed HTML tags. Use plain text formatting or standard Markdown.
+Write a comprehensive pricing strategy. Format key data points into a clean Markdown table with columns: | Element | Recommendation | Rationale |.
+Follow the table with a few short bullet points for Quick Action Steps.
 """
     res = llm.invoke(prompt)
     state.analysis.pricing_strategy = res.content
@@ -183,7 +180,7 @@ def build_workflow():
 # 4. EXPORT GENERATORS (PDF & CSV)
 # ==========================================
 def generate_pdf(data: MarketAnalysis) -> bytes:
-    """Generates a downloadable PDF report with robust ReportLab XML safety."""
+    """Generates a structured, clean PDF report with native ReportLab tables."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     styles = getSampleStyleSheet()
@@ -191,6 +188,8 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     title_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontSize=16, leading=20, spaceAfter=10)
     h2_style = ParagraphStyle('ReportH2', parent=styles['Heading2'], fontSize=12, leading=16, spaceBefore=8, spaceAfter=4)
     body_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontSize=9, leading=13, spaceAfter=3)
+    table_cell_style = ParagraphStyle('TableCell', parent=styles['Normal'], fontSize=8, leading=11)
+    table_header_style = ParagraphStyle('TableHeader', parent=styles['Normal'], fontSize=8, leading=11, fontName="Helvetica-Bold", textColor=colors.whitesmoke)
     
     story = [
         Paragraph(clean_for_reportlab(f"Amazon Market Report: {data.product_name}"), title_style),
@@ -212,37 +211,74 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     story.append(Spacer(1, 6))
     
     story.append(Paragraph("Pricing & Margin Strategy:", h2_style))
+    
+    # Parse strategy text and convert markdown tables into real ReportLab Table flowables
     strategy_lines = data.pricing_strategy.split('\n')
+    table_rows = []
+    
     for line in strategy_lines:
         line_str = line.strip()
         if not line_str:
             continue
-        # Skip markdown table header separators (e.g. |---|---|)
-        if re.match(r'^[\|\-\:\s]+$', line_str):
-            continue
-        # Clean markdown table pipes into readable spacing if they are part of a table row
+        # Check if line is part of a markdown table
         if line_str.startswith('|') and line_str.endswith('|'):
-            cells = [c.strip() for c in line_str.split('|')[1:-1] if c.strip()]
-            line_str = " | ".join(cells)
+            cells = [c.strip() for c in line_str.split('|')[1:-1]]
+            # Skip divider rows like |---|---|---|
+            if all(re.match(r'^[\-\:]+$', c) for c in cells if c):
+                continue
+            table_rows.append(cells)
+        else:
+            # If we were building a table and hit non-table text, flush the table first
+            if table_rows:
+                story.append(_build_reportlab_table(table_rows, table_header_style, table_cell_style))
+                story.append(Spacer(1, 6))
+                table_rows = []
+            story.append(Paragraph(clean_for_reportlab(line_str), body_style))
+            story.append(Spacer(1, 2))
             
-        story.append(Paragraph(clean_for_reportlab(line_str), body_style))
-        story.append(Spacer(1, 2))
+    # Flush remaining table if any
+    if table_rows:
+        story.append(_build_reportlab_table(table_rows, table_header_style, table_cell_style))
     
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
+def _build_reportlab_table(raw_rows, header_style, cell_style):
+    """Helper to format rows into a styled ReportLab Table object."""
+    formatted_data = []
+    for i, row in enumerate(raw_rows):
+        formatted_row = []
+        for cell in row:
+            p_style = header_style if i == 0 else cell_style
+            formatted_row.append(Paragraph(clean_for_reportlab(cell), p_style))
+        formatted_data.append(formatted_row)
+        
+    t = Table(formatted_data, colWidths=[120, 160, 260])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#bdc3c7')),
+    ]))
+    return t
+
 def generate_csv(data: MarketAnalysis) -> str:
-    """Generates a CSV formatted string report."""
+    """Generates a clean, structured CSV formatted report for Excel."""
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Field", "Value"])
+    writer.writerow(["Report Section", "Content Details"])
     writer.writerow(["Product Name", data.product_name])
-    writer.writerow(["Price Range", data.price_range])
-    writer.writerow(["Pros", " | ".join(data.pros)])
-    writer.writerow(["Cons", " | ".join(data.cons)])
-    writer.writerow(["Recommendation", data.recommendation])
-    writer.writerow(["Pricing Strategy", data.pricing_strategy.replace("\n", " ")])
+    writer.writerow(["Estimated Price Range", data.price_range])
+    writer.writerow(["Key Pros", " | ".join(data.pros)])
+    writer.writerow(["Key Cons", " | ".join(data.cons)])
+    writer.writerow(["Strategic Recommendation", data.recommendation])
+    
+    # Clean pricing strategy line breaks for spreadsheet compatibility
+    clean_strategy = data.pricing_strategy.replace('\n', ' -- ')
+    writer.writerow(["Pricing & Margin Strategy", clean_strategy])
     return output.getvalue()
 
 
@@ -268,7 +304,7 @@ groq_api_key = st.sidebar.text_input("Groq API Key", value=default_key, type="pa
 if groq_api_key:
     os.environ["GROQ_API_KEY"] = groq_api_key
 
-# Historical Reports Accordion in Sidebar (with safe None-checks)
+# Historical Reports Accordion in Sidebar
 st.sidebar.markdown("---")
 st.sidebar.header("📜 Saved Reports History")
 history_rows = fetch_history()
@@ -297,7 +333,6 @@ if st.button("Run Market Analysis", type="primary"):
                 final_output = graph.invoke(initial_state)
                 analysis: MarketAnalysis = final_output["analysis"]
                 
-                # Save into DB
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
                 st.success("Analysis complete and archived to database!")
@@ -322,7 +357,7 @@ if "current_analysis" in st.session_state:
             
         st.subheader("⚠️ Key Cons & Market Gaps")
         for con in data.cons:
-            st.markdown(f"- {con}")
+            st.markdown(f- {con})
             
         st.subheader("💡 Strategic Recommendation")
         st.info(data.recommendation)
@@ -344,7 +379,7 @@ if "current_analysis" in st.session_state:
         
         csv_data = generate_csv(data)
         st.download_button(
-            label="📊 Download CSV Data",
+            label="📊 Download CSV Data (Excel-friendly)",
             data=csv_data,
             file_name=f"{data.product_name.replace(' ', '_')}_market_report.csv",
             mime="text/csv",
