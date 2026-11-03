@@ -92,6 +92,20 @@ def clean_for_reportlab(text: str) -> str:
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
     return text
 
+def clean_for_csv(text: str) -> str:
+    """Strips markdown and normalizes text for clean spreadsheet viewing."""
+    if not text:
+        return ""
+    # Remove markdown bold/italics
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    # Normalize unicode dashes
+    for char in ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212']:
+        text = text.replace(char, '-')
+    # Flatten newlines into separators for clean row cells
+    text = text.replace('\n', ' -- ').replace('\r', '')
+    return text
+
 
 # ==========================================
 # 2. PYDANTIC SCHEMAS & STATE
@@ -269,20 +283,19 @@ def _build_reportlab_table(raw_rows, header_style, cell_style):
     return t
 
 def generate_csv(data: MarketAnalysis) -> bytes:
-    """Generates a clean, structured CSV formatted bytes object with UTF-8 BOM for Excel."""
+    """Generates a clean, structured semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
     output = StringIO()
-    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+    # Use semicolon (;) delimiter for international/European Excel compatibility
+    writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+    
     writer.writerow(["Report Section", "Content Details"])
-    writer.writerow(["Product Name", data.product_name])
-    writer.writerow(["Estimated Price Range", data.price_range])
-    writer.writerow(["Key Pros", " | ".join(data.pros)])
-    writer.writerow(["Key Cons", " | ".join(data.cons)])
-    writer.writerow(["Strategic Recommendation", data.recommendation])
+    writer.writerow(["Product Name", clean_for_csv(data.product_name)])
+    writer.writerow(["Estimated Price Range", clean_for_csv(data.price_range)])
+    writer.writerow(["Key Pros", " | ".join([clean_for_csv(p) for p in data.pros])])
+    writer.writerow(["Key Cons", " | ".join([clean_for_csv(c) for c in data.cons])])
+    writer.writerow(["Strategic Recommendation", clean_for_csv(data.recommendation)])
+    writer.writerow(["Pricing & Margin Strategy", clean_for_csv(data.pricing_strategy)])
     
-    clean_strategy = data.pricing_strategy.replace('\n', ' -- ')
-    writer.writerow(["Pricing & Margin Strategy", clean_strategy])
-    
-    # Encode with utf-8-sig (BOM) so Excel natively reads UTF-8 and respects cell borders
     return output.getvalue().encode('utf-8-sig')
 
 
