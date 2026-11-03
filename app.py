@@ -184,7 +184,7 @@ def node_scraper(state: AgentState) -> dict:
 
 def node_analyzer(state: AgentState) -> dict:
     """Node 2: Analyzes scraped content into structured Pydantic format."""
-    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.2)
+    llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
     structured_llm = llm.with_structured_output(MarketAnalysis)
     
     prompt = f"""You are an expert e-commerce market researcher.
@@ -206,7 +206,7 @@ Provide a structured analysis containing:
 
 def node_pricing_strategist(state: AgentState) -> dict:
     """Node 3: Refines and expands the pricing strategy in the analysis."""
-    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
+    llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.3)
     
     prompt = f"""You are a senior Amazon Pricing Strategist.
 Review the market analysis below for product '{state.analysis.product_name}' (Price range: {state.analysis.price_range}).
