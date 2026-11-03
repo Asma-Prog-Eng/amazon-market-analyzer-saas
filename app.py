@@ -73,9 +73,11 @@ def clean_for_reportlab(text: str) -> str:
     """Sanitizes text for ReportLab Paragraph XML parsing."""
     if not text:
         return ""
-    # Convert unclosed <br> or <br > tags into ReportLab-compliant XML line breaks <br/>
-    text = re.sub(r'<br\s*/>?', '<br/>', text, flags=re.IGNORECASE)
-    # Escape standalone bare ampersands so ReportLab doesn't crash on XML entity parsing
+    # Replace any form of <br> with strict ReportLab self-closing <br/>
+    text = re.sub(r'<\s*br\s*/?\s*>', '<br/>', text, flags=re.IGNORECASE)
+    # Strip unsupported HTML tags, keeping only safe formatting tags like b, i, u
+    text = re.sub(r'</?\s*(?!b|i|u|br)\w+\b[^>]*>', '', text, flags=re.IGNORECASE)
+    # Escape standalone bare ampersands
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
     return text
 
@@ -181,40 +183,50 @@ def build_workflow():
 # 4. EXPORT GENERATORS (PDF & CSV)
 # ==========================================
 def generate_pdf(data: MarketAnalysis) -> bytes:
-    """Generates a downloadable PDF report with ReportLab XML safety."""
+    """Generates a downloadable PDF report with robust ReportLab XML safety."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontSize=18, leading=22, spaceAfter=12)
-    h2_style = ParagraphStyle('ReportH2', parent=styles['Heading2'], fontSize=14, leading=18, spaceBefore=10, spaceAfter=6)
-    body_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontSize=10, leading=14, spaceAfter=4)
+    title_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontSize=16, leading=20, spaceAfter=10)
+    h2_style = ParagraphStyle('ReportH2', parent=styles['Heading2'], fontSize=12, leading=16, spaceBefore=8, spaceAfter=4)
+    body_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontSize=9, leading=13, spaceAfter=3)
     
     story = [
         Paragraph(clean_for_reportlab(f"Amazon Market Report: {data.product_name}"), title_style),
         Paragraph(clean_for_reportlab(f"<b>Estimated Price Range:</b> {data.price_range}"), body_style),
-        Spacer(1, 12),
+        Spacer(1, 8),
         Paragraph("Key Advantages (Pros):", h2_style)
     ]
     for pro in data.pros:
         story.append(Paragraph(clean_for_reportlab(f"• {pro}"), body_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 6))
     
     story.append(Paragraph("Key Complaints & Market Gaps (Cons):", h2_style))
     for con in data.cons:
         story.append(Paragraph(clean_for_reportlab(f"• {con}"), body_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 6))
     
     story.append(Paragraph("Strategic Recommendation:", h2_style))
     story.append(Paragraph(clean_for_reportlab(data.recommendation), body_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 6))
     
     story.append(Paragraph("Pricing & Margin Strategy:", h2_style))
-    strategy_paragraphs = data.pricing_strategy.split('\n')
-    for p in strategy_paragraphs:
-        if p.strip():
-            story.append(Paragraph(clean_for_reportlab(p), body_style))
-            story.append(Spacer(1, 4))
+    strategy_lines = data.pricing_strategy.split('\n')
+    for line in strategy_lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        # Skip markdown table header separators (e.g. |---|---|)
+        if re.match(r'^[\|\-\:\s]+$', line_str):
+            continue
+        # Clean markdown table pipes into readable spacing if they are part of a table row
+        if line_str.startswith('|') and line_str.endswith('|'):
+            cells = [c.strip() for c in line_str.split('|')[1:-1] if c.strip()]
+            line_str = " | ".join(cells)
+            
+        story.append(Paragraph(clean_for_reportlab(line_str), body_style))
+        story.append(Spacer(1, 2))
     
     doc.build(story)
     buffer.seek(0)
