@@ -1,6 +1,6 @@
 import os
 import re
-import sqlite3
+import psycopg2
 from io import BytesIO, StringIO
 import csv
 from typing import List
@@ -20,97 +20,106 @@ from reportlab.lib import colors
 
 
 # ==========================================
-# 1. DATABASE SETUP & HELPER FUNCTIONS
+# 1. DATABASE SETUP & HELPER FUNCTIONS (SUPABASE)
 # ==========================================
-DB_NAME = "market_reports.db"
+DB_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL", ""))
 
 def init_db():
-    """Initializes SQLite database for report history."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            product_name TEXT,
-            price_range TEXT,
-            pros TEXT,
-            cons TEXT,
-            recommendation TEXT,
-            pricing_strategy TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    """Initializes PostgreSQL database table for report history."""
+    if not DB_URL:
+        return
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                product_name TEXT,
+                price_range TEXT,
+                pros TEXT,
+                cons TEXT,
+                recommendation TEXT,
+                pricing_strategy TEXT
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Database initialization error: {e}")
 
 def save_report_to_db(data: "MarketAnalysis"):
-    """Saves a market analysis report into the database."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        data.product_name,
-        data.price_range,
-        "|".join(data.pros),
-        "|".join(data.cons),
-        data.recommendation,
-        data.pricing_strategy
-    ))
-    conn.commit()
-    conn.close()
+    """Saves a market analysis report into the cloud PostgreSQL database."""
+    if not DB_URL:
+        return
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            data.product_name,
+            data.price_range,
+            "|".join(data.pros),
+            "|".join(data.cons),
+            data.recommendation,
+            data.pricing_strategy
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error saving report to DB: {e}")
 
 def fetch_history():
-    """Fetches past report history from SQLite database."""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, timestamp, product_name, price_range, recommendation FROM reports ORDER BY id DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    """Fetches past report history from cloud PostgreSQL database."""
+    if not DB_URL:
+        return []
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, timestamp, product_name, price_range, recommendation FROM reports ORDER BY id DESC LIMIT 5")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        return []
 
 def clean_for_reportlab(text: str) -> str:
     """Sanitizes text and normalizes unicode characters for ReportLab PDF compatibility."""
     if not text:
         return ""
     
-    # Replace non-breaking hyphens, soft hyphens, and all dash variations
     dash_variants = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u00ad']
     for char in dash_variants:
         text = text.replace(char, '-')
         
-    # Replace unicode bullets and unsupported symbols that cause black fallback boxes
     bullet_variants = ['\u2022', '\u2023', '\u25aa', '\u25ab', '\u25cf', '\u25cb', '\u25a0', '\u25a1']
     for char in bullet_variants:
         text = text.replace(char, '-')
 
-    # Replace unicode tilde / approximately symbols with safe text
     tilde_variants = ['\u223c', '\u2248', '\u02dc', '\u223d', '\u2243', '\u2245', '\u2249', '~']
     for char in tilde_variants:
         text = text.replace(char, 'approx. ')
         
-    # Replace smart quotes and apostrophes
     for char in ['\u2018', '\u2019', '\u201a', '\u201b']:
         text = text.replace(char, "'")
     for char in ['\u201c', '\u201d', '\u201e', '\u201f']:
         text = text.replace(char, '"')
         
-    # Replace special whitespace characters
     text = text.replace('\u00a0', ' ').replace('\u202f', ' ')
 
-    # Replace markdown bold **text** with ReportLab XML <b>text</b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    # Replace any form of <br> with strict ReportLab self-closing <br/>
     text = re.sub(r'<\s*br\s*/?\s*>', '<br/>', text, flags=re.IGNORECASE)
-    # Strip unsupported HTML tags, keeping only safe formatting tags
     text = re.sub(r'</?\s*(?!b|i|u|br)\w+\b[^>]*>', '', text, flags=re.IGNORECASE)
-    # Escape standalone bare ampersands
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
     return text
 
 def clean_for_csv(text: str) -> str:
-    """Strips markdown tables, formatting tags, and normalizes text for clean spreadsheet viewing."""
+    """Strips markdown tables, formatting tags, and uses vertical newlines for clean spreadsheet viewing."""
     if not text:
         return ""
     
@@ -120,27 +129,20 @@ def clean_for_csv(text: str) -> str:
         line_str = line.strip()
         if not line_str:
             continue
-        # Skip markdown table divider lines like |---|---|
         if re.match(r'^[\|\-\:\s]+$', line_str):
             continue
-        # Convert table rows with pipes into clean arrow-separated text
         if line_str.startswith('|') and line_str.endswith('|'):
             cells = [c.strip() for c in line_str.split('|')[1:-1] if c.strip()]
             line_str = " -> ".join(cells)
             
-        # Remove markdown bold/italics/headers
         line_str = re.sub(r'\*\*(.*?)\*\*', r'\1', line_str)
         line_str = re.sub(r'\*(.*?)\*', r'\1', line_str)
         line_str = re.sub(r'^#+\s*', '', line_str)
-        # Clean HTML tags like <br/>
         line_str = re.sub(r'<[^>]+>', ' ', line_str)
         
         cleaned_lines.append(line_str)
-
-    # Join with actual newlines so Excel stacks them vertically within the cell
+        
     return "\n".join(cleaned_lines)
-
-
 
 
 # ==========================================
@@ -319,20 +321,20 @@ def _build_reportlab_table(raw_rows, header_style, cell_style):
     return t
 
 def generate_csv(data: MarketAnalysis) -> bytes:
-    """Generates a clean, structured semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
+    """Generates a clean, semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
     output = StringIO()
-    # Use semicolon delimiter with minimal quoting so Excel parses columns natively
     writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
     
     writer.writerow(["Report Section", "Content Details"])
     writer.writerow(["Product Name", clean_for_csv(data.product_name)])
     writer.writerow(["Estimated Price Range", clean_for_csv(data.price_range)])
-    writer.writerow(["Key Pros", " | ".join([clean_for_csv(p) for p in data.pros])])
-    writer.writerow(["Key Cons", " | ".join([clean_for_csv(c) for c in data.cons])])
+    writer.writerow(["Key Pros", " \n ".join([clean_for_csv(p) for p in data.pros])])
+    writer.writerow(["Key Cons", " \n ".join([clean_for_csv(c) for c in data.cons])])
     writer.writerow(["Strategic Recommendation", clean_for_csv(data.recommendation)])
     writer.writerow(["Pricing & Margin Strategy", clean_for_csv(data.pricing_strategy)])
     
     return output.getvalue().encode('utf-8-sig')
+
 
 # ==========================================
 # 5. STREAMLIT UI APPLICATION
@@ -387,7 +389,7 @@ if st.button("Run Market Analysis", type="primary"):
                 
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
-                st.success("Analysis complete and archived to database!")
+                st.success("Analysis complete and archived to Supabase database!")
                 
             except Exception as e:
                 st.error(f"Error executing agent workflow: {str(e)}")

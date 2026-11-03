@@ -1,7 +1,8 @@
 streamlit
+pydantic
+requests
+beautifulsoup4
 langchain-groq
 langgraph
-pydantic
-beautifulsoup4
-requests
 reportlab
+psycopg2-binary
