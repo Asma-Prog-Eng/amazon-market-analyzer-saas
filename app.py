@@ -84,6 +84,11 @@ def clean_for_reportlab(text: str) -> str:
     bullet_variants = ['\u2022', '\u2023', '\u25aa', '\u25ab', '\u25cf', '\u25cb', '\u25a0', '\u25a1']
     for char in bullet_variants:
         text = text.replace(char, '-')
+
+    # Replace unicode tilde / approximately symbols with safe text
+    tilde_variants = ['\u223c', '\u2248', '\u02dc', '\u223d', '\u2243', '\u2245', '\u2249', '~']
+    for char in tilde_variants:
+        text = text.replace(char, 'approx. ')
         
     # Replace smart quotes and apostrophes
     for char in ['\u2018', '\u2019', '\u201a', '\u201b']:
@@ -311,9 +316,10 @@ def _build_reportlab_table(raw_rows, header_style, cell_style):
     return t
 
 def generate_csv(data: MarketAnalysis) -> bytes:
-    """Generates a clean, structured semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
+    """Generates a clean, fully-quoted CSV bytes object with UTF-8 BOM for strict 2-column Excel layout."""
     output = StringIO()
-    writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+    # Use standard comma delimiter with QUOTE_ALL to prevent internal semicolons/commas from splitting columns
+    writer = csv.writer(output, delimiter=',', quoting=csv.QUOTE_ALL)
     
     writer.writerow(["Report Section", "Content Details"])
     writer.writerow(["Product Name", clean_for_csv(data.product_name)])
