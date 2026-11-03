@@ -74,15 +74,21 @@ def clean_for_reportlab(text: str) -> str:
     """Sanitizes text and normalizes unicode characters for ReportLab PDF compatibility."""
     if not text:
         return ""
-    # Normalize unicode dashes, minus signs, and smart quotes to standard ASCII
-    text = (text.replace('\u2013', '-')
-                .replace('\u2014', '-')
-                .replace('\u2212', '-')
-                .replace('\u2018', "'")
-                .replace('\u2019', "'")
-                .replace('\u201c', '"')
-                .replace('\u201d', '"'))
     
+    # Comprehensive replacement for non-breaking hyphens, soft hyphens, and all dash/bullet variations
+    dash_variants = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u00ad']
+    for char in dash_variants:
+        text = text.replace(char, '-')
+        
+    # Replace smart quotes and apostrophes
+    for char in ['\u2018', '\u2019', '\u201a', '\u201b']:
+        text = text.replace(char, "'")
+    for char in ['\u201c', '\u201d', '\u201e', '\u201f']:
+        text = text.replace(char, '"')
+        
+    # Replace special whitespace characters
+    text = text.replace('\u00a0', ' ').replace('\u202f', ' ')
+
     # Replace markdown bold **text** with ReportLab XML <b>text</b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     # Replace any form of <br> with strict ReportLab self-closing <br/>
