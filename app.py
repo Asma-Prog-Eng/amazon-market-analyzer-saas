@@ -104,6 +104,7 @@ def clean_for_reportlab(text: str) -> str:
     text = text.replace(r'\pm', '+/-')
     text = text.replace(r'\%', '%')
     text = text.replace('\\', '')
+    text = re.sub(r'<\s*br\s*/?\s*>', ' ', text, flags=re.IGNORECASE)
     
     dash_variants = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u00ad']
     for char in dash_variants:
@@ -125,7 +126,6 @@ def clean_for_reportlab(text: str) -> str:
     text = text.replace('\u00a0', ' ').replace('\u202f', ' ')
 
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'<\s*br\s*/?\s*>', '<br/>', text, flags=re.IGNORECASE)
     text = re.sub(r'</?\s*(?!b|i|u|br)\w+\b[^>]*>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
     return text
@@ -135,6 +135,7 @@ def clean_for_csv(text: str) -> str:
     if not text:
         return ""
     
+    text = re.sub(r'<\s*br\s*/?\s*>', ' \n ', text, flags=re.IGNORECASE)
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -263,7 +264,7 @@ Follow the table with a few short bullet points for Quick Action Steps. Avoid La
     return {"analysis": state.analysis}
 
 def node_sourcing_finder(state: AgentState) -> dict:
-    """Node 4: Generates manufacturing upgrades and compliance advice tailored for the target market."""
+    """Node 4: Generates clean markdown bullet lists for manufacturing upgrades and compliance."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     cons_text = ', '.join(state.analysis.cons)
@@ -271,12 +272,10 @@ def node_sourcing_finder(state: AgentState) -> dict:
 Target Product: '{state.analysis.product_name}'
 Identified Customer Complaints/Cons to Fix: {cons_text}
 
-Provide an actionable Sourcing & Manufacturing Blueprint containing:
-1. **Supplier Quality Upgrades**: Specific engineering or material instructions to give Chinese suppliers to fix the identified consumer complaints.
+Provide an actionable Sourcing & Manufacturing Blueprint structured with clean markdown bullet points and headings (NO HTML tags like <br> and NO Markdown tables). Include:
+1. **Supplier Quality Upgrades**: Specific engineering or material instructions to give Chinese suppliers to fix consumer complaints.
 2. **Import & Compliance Requirements**: Essential certifications for importing into {state.target_market} (e.g., SASO/Saber certification and Arabic labeling for Saudi Arabia, CE marks for Europe, local voltage/plug standards).
-3. **Vetting Checklist**: Key questions to ask suppliers regarding Trade Assurance and sample testing.
-
-Format your response cleanly with markdown headers and bullet points. Do not include raw HTML link tags.
+3. **Vetting & Sample Checklist**: Key questions to ask suppliers regarding Trade Assurance, sample testing, and quality control.
 """
     res = llm.invoke(prompt)
     state.analysis.sourcing_info = res.content
@@ -485,7 +484,6 @@ if "current_analysis" in st.session_state:
         st.subheader("🏭 Alibaba & AliExpress Sourcing & Compliance Blueprint")
         st.markdown(data.sourcing_info)
         
-        # Native, bulletproof Streamlit Clickable Action Buttons for Sourcing
         st.markdown("#### 🔗 Direct Supplier Search Shortcuts")
         q_encoded = requests.utils.quote(data.product_name)
         bcol1, bcol2 = st.columns(2)
