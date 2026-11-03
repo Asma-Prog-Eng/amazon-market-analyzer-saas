@@ -94,9 +94,15 @@ def fetch_history():
         return []
 
 def clean_for_reportlab(text: str) -> str:
-    """Sanitizes text and normalizes unicode characters for ReportLab PDF compatibility."""
+    """Sanitizes text, strips LaTeX math notation, and normalizes characters for ReportLab PDF compatibility."""
     if not text:
         return ""
+    
+    # Strip LaTeX math tokens and symbols that break ReportLab parser
+    text = re.sub(r'\$(.*?)\$', r'\1', text)
+    text = text.replace(r'\pm', '+/-')
+    text = text.replace(r'\%', '%')
+    text = text.replace('\\', '')
     
     dash_variants = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u00ad']
     for char in dash_variants:
@@ -226,7 +232,7 @@ Existing Pros: {', '.join(state.analysis.pros)}
 Existing Cons: {', '.join(state.analysis.cons)}
 
 Write a comprehensive pricing strategy. Format key data points into a clean Markdown table with columns: | Element | Recommendation | Rationale |.
-Follow the table with a few short bullet points for Quick Action Steps.
+Follow the table with a few short bullet points for Quick Action Steps. Avoid using LaTeX math symbols or dollar signs for math formatting.
 """
     res = llm.invoke(prompt)
     state.analysis.pricing_strategy = res.content
