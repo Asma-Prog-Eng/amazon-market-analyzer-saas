@@ -187,7 +187,6 @@ def node_scraper(state: AgentState) -> dict:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
     
-    # Determine domain context based on target market
     market_domain = "amazon.com"
     if "Germany" in state.target_market:
         market_domain = "amazon.de"
@@ -264,7 +263,7 @@ Follow the table with a few short bullet points for Quick Action Steps. Avoid La
     return {"analysis": state.analysis}
 
 def node_sourcing_finder(state: AgentState) -> dict:
-    """Node 4: Generates Alibaba/AliExpress sourcing advice tailored for importing into the target market."""
+    """Node 4: Generates clean HTML anchor tag links for Alibaba & AliExpress sourcing."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     cons_text = ', '.join(state.analysis.cons)
@@ -273,9 +272,9 @@ Target Product: '{state.analysis.product_name}'
 Identified Customer Complaints/Cons to Fix: {cons_text}
 
 Provide an actionable Sourcing & Supplier Blueprint containing:
-1. **Top Alibaba Search Keywords**: 3-4 precise English and industry search terms.
-2. **Direct Sourcing Search Links**: Markdown hyperlinks formatted as `[Search Alibaba for Product Name](https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&SearchText=QUERY)` and `[Search AliExpress for Product Name](https://www.aliexpress.com/w/wholesale-QUERY.html)`.
-3. **Supplier Quality Upgrades & Import Compliance**: Specific manufacturing instructions to fix consumer complaints and compliance considerations for importing into {state.target_market} (e.g., CE marks for Europe/Germany, Saber/SASO for Saudi Arabia, local electrical plugs/standards).
+1. **Top Alibaba Search Keywords**: 3-4 precise search terms.
+2. **Direct Sourcing Links**: You MUST format direct links using standard HTML anchor tags so they render as clickable links. Example: `<a href="https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&SearchText=EXACT_KEYWORD" target="_blank">Search Alibaba for EXACT_KEYWORD</a>` and `<a href="https://www.aliexpress.com/w/wholesale-EXACT_KEYWORD.html" target="_blank">Search AliExpress for EXACT_KEYWORD</a>`.
+3. **Supplier Quality Upgrades & Import Compliance**: Specific manufacturing instructions to fix consumer complaints and compliance considerations for importing into {state.target_market} (e.g., SASO/Saber certification for Saudi Arabia, CE marks for Europe, local voltage/plug standards).
 
 Format your response cleanly with markdown headers and bullet points.
 """
@@ -344,7 +343,9 @@ def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
     story.append(Spacer(1, 6))
     
     story.append(Paragraph("Alibaba & AliExpress Sourcing Blueprint:", h2_style))
-    for line in data.sourcing_info.split('\n'):
+    # Strip HTML tags for clean PDF rendering
+    clean_sourcing = re.sub(r'<[^>]+>', '', data.sourcing_info)
+    for line in clean_sourcing.split('\n'):
         if line.strip():
             story.append(Paragraph(clean_for_reportlab(line), body_style))
             
@@ -457,7 +458,6 @@ if "current_analysis" in st.session_state:
     
     st.markdown("---")
     
-    # Highlight Banner for Winning Products
     if data.is_winning_product:
         st.success(f"🚀 **WINNING PRODUCT DETECTED FOR {current_market.upper()}!** Viability Score: **{data.viability_score}/100** — High profit potential and clear market gap identified.")
     else:
@@ -485,7 +485,8 @@ if "current_analysis" in st.session_state:
         st.markdown(data.pricing_strategy)
         
         st.subheader("🏭 Alibaba & AliExpress Sourcing Blueprint")
-        st.markdown(data.sourcing_info)
+        # Use st.markdown with unsafe_allow_html=True so the HTML links render as clickable elements!
+        st.markdown(data.sourcing_info, unsafe_allow_html=True)
         
     with col2:
         st.header("📥 Export Market Report")
