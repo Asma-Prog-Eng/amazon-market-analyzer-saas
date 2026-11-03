@@ -25,7 +25,7 @@ from reportlab.lib import colors
 DB_URL = st.secrets.get("DATABASE_URL", os.environ.get("DATABASE_URL", ""))
 
 def init_db():
-    """Initializes PostgreSQL database table for report history."""
+    """Initializes PostgreSQL database table for report history with viability metrics."""
     if not DB_URL:
         return
     try:
@@ -40,7 +40,9 @@ def init_db():
                 pros TEXT,
                 cons TEXT,
                 recommendation TEXT,
-                pricing_strategy TEXT
+                pricing_strategy TEXT,
+                viability_score INT,
+                is_winning_product BOOLEAN
             )
         """)
         conn.commit()
@@ -50,22 +52,24 @@ def init_db():
         st.error(f"Database initialization error: {e}")
 
 def save_report_to_db(data: "MarketAnalysis"):
-    """Saves a market analysis report into the cloud PostgreSQL database."""
+    """Saves a market analysis report and winning metrics into the cloud PostgreSQL database."""
     if not DB_URL:
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             data.product_name,
             data.price_range,
             "|".join(data.pros),
             "|".join(data.cons),
             data.recommendation,
-            data.pricing_strategy
+            data.pricing_strategy,
+            data.viability_score,
+            data.is_winning_product
         ))
         conn.commit()
         cursor.close()
@@ -80,7 +84,7 @@ def fetch_history():
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, timestamp, product_name, price_range, recommendation FROM reports ORDER BY id DESC LIMIT 5")
+        cursor.execute("SELECT id, timestamp, product_name, price_range, viability_score, is_winning_product FROM reports ORDER BY id DESC LIMIT 5")
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -146,7 +150,7 @@ def clean_for_csv(text: str) -> str:
 
 
 # ==========================================
-# 2. PYDANTIC SCHEMAS & STATE
+# 2. PYDANTIC SCHEMAS & STATE (WITH WINNING METRICS)
 # ==========================================
 class MarketAnalysis(BaseModel):
     product_name: str = Field(description="Name or category of the analyzed product")
@@ -155,6 +159,8 @@ class MarketAnalysis(BaseModel):
     cons: List[str] = Field(description="Common complaints, weaknesses, or market gaps")
     recommendation: str = Field(description="Strategic recommendation for entering or scaling in this market")
     pricing_strategy: str = Field(description="Detailed pricing strategy, margins, and tier structure")
+    viability_score: int = Field(description="Calculated score from 1 to 100 assessing overall market viability and winning product potential")
+    is_winning_product: bool = Field(description="True if the product has strong profit margins, high demand, and fixable consumer complaints; false otherwise")
 
 class AgentState(BaseModel):
     search_query: str
@@ -170,7 +176,7 @@ def node_scraper(state: AgentState) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
-    search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(state.search_query + ' amazon reviews price specs')}"
+    search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(state.search_query + ' amazon reviews price specs best seller')}"
     
     try:
         res = requests.get(search_url, headers=headers, timeout=10)
@@ -183,11 +189,11 @@ def node_scraper(state: AgentState) -> dict:
     return {"scraped_content": scraped_text}
 
 def node_analyzer(state: AgentState) -> dict:
-    """Node 2: Analyzes scraped content into structured Pydantic format."""
+    """Node 2: Analyzes scraped content into structured Pydantic format with winning score calculation."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.2)
     structured_llm = llm.with_structured_output(MarketAnalysis)
     
-    prompt = f"""You are an expert e-commerce market researcher.
+    prompt = f"""You are an expert e-commerce market researcher and winning product hunter.
 Analyze the following market research text for query: '{state.search_query}'.
 
 Scraped Content:
@@ -197,9 +203,11 @@ Provide a structured analysis containing:
 1. Product name/category
 2. Estimated price range
 3. Top 3-5 pros/strengths
-4. Top 3-5 cons/complaints/gaps
+4. Top 3-5 cons/complaints/gaps (look for fixable product flaws)
 5. Strategic recommendation
 6. Initial baseline pricing approach
+7. Viability score (1-100 scale based on market demand, profit potential, and lack of unbeatable dominant brands)
+8. Boolean flag (true/false) determining if this is a high-potential winning product
 """
     result = structured_llm.invoke(prompt)
     return {"analysis": result}
@@ -209,7 +217,7 @@ def node_pricing_strategist(state: AgentState) -> dict:
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     prompt = f"""You are a senior Amazon Pricing Strategist.
-Review the market analysis below for product '{state.analysis.product_name}' (Price range: {state.analysis.price_range}).
+Review the market analysis below for product '{state.analysis.product_name}' (Price range: {state.analysis.price_range}, Viability Score: {state.analysis.viability_score}/100).
 
 Existing Pros: {', '.join(state.analysis.pros)}
 Existing Cons: {', '.join(state.analysis.cons)}
@@ -251,8 +259,11 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     table_cell_style = ParagraphStyle('TableCell', parent=styles['Normal'], fontSize=8, leading=11)
     table_header_style = ParagraphStyle('TableHeader', parent=styles['Normal'], fontSize=8, leading=11, fontName="Helvetica-Bold", textColor=colors.whitesmoke)
     
+    status_text = "WINNING PRODUCT CANDIDATE 🚀" if data.is_winning_product else "Standard Niche"
+    
     story = [
         Paragraph(clean_for_reportlab(f"Amazon Market Report: {data.product_name}"), title_style),
+        Paragraph(clean_for_reportlab(f"<b>Viability Score:</b> {data.viability_score}/100 ({status_text})"), body_style),
         Paragraph(clean_for_reportlab(f"<b>Estimated Price Range:</b> {data.price_range}"), body_style),
         Spacer(1, 8),
         Paragraph("Key Advantages (Pros):", h2_style)
@@ -327,6 +338,8 @@ def generate_csv(data: MarketAnalysis) -> bytes:
     
     writer.writerow(["Report Section", "Content Details"])
     writer.writerow(["Product Name", clean_for_csv(data.product_name)])
+    writer.writerow(["Viability Score", f"{data.viability_score}/100"])
+    writer.writerow(["Is Winning Product", str(data.is_winning_product)])
     writer.writerow(["Estimated Price Range", clean_for_csv(data.price_range)])
     writer.writerow(["Key Pros", " \n ".join([clean_for_csv(p) for p in data.pros])])
     writer.writerow(["Key Cons", " \n ".join([clean_for_csv(c) for c in data.cons])])
@@ -348,7 +361,7 @@ st.set_page_config(
 )
 
 st.title("🛒 Amazon Market Analysis SaaS")
-st.subheader("Multi-Agent Intelligence Platform Powered by LangGraph & Groq")
+st.subheader("Multi-Agent Intelligence Platform & Winning Product Finder")
 
 # Sidebar Configuration
 st.sidebar.header("🔑 Credentials & Settings")
@@ -358,6 +371,14 @@ groq_api_key = st.sidebar.text_input("Groq API Key", value=default_key, type="pa
 if groq_api_key:
     os.environ["GROQ_API_KEY"] = groq_api_key
 
+# Quick Trending Niche Picker
+st.sidebar.markdown("---")
+st.sidebar.header("🚀 Quick Trending Niches")
+preset_niche = st.sidebar.selectbox(
+    "Select to auto-fill query:",
+    ["-- Custom Input --", "Wireless Ergonomic Mouse", "Smart Plant Waterer", "Posture Correction Brace", "Portable Blender Bottle"]
+)
+
 # Historical Reports Accordion in Sidebar
 st.sidebar.markdown("---")
 st.sidebar.header("📜 Saved Reports History")
@@ -366,21 +387,24 @@ if history_rows:
     for row in history_rows[:5]:
         r_id = row[0]
         r_time = str(row[1])[:10] if row[1] else "N/A"
-        r_prod = row[2] if len(row) > 2 and row[2] else "Unknown Product"
-        st.sidebar.caption(f"**ID #{r_id}** | {r_time} | {r_prod}")
+        r_prod = row[2] if len(row) > 2 and row[2] else "Unknown"
+        r_score = row[4] if len(row) > 4 and row[4] is not None else "??"
+        r_win = "🚀" if len(row) > 5 and row[5] else ""
+        st.sidebar.caption(f"**ID #{r_id}** {r_win} ({r_score}/100) | {r_prod}")
 else:
     st.sidebar.caption("No archived reports found.")
 
 # Main Form Input
-search_query = st.text_input("Product Search Query", placeholder="e.g. Wireless Ergonomic Mouse, Mechanical Keyboard, Foam Roller")
+default_query = preset_niche if preset_niche != "-- Custom Input --" else ""
+search_query = st.text_input("Product Search Query", value=default_query, placeholder="e.g. Wireless Ergonomic Mouse, Mechanical Keyboard")
 
-if st.button("Run Market Analysis", type="primary"):
+if st.button("Run Winning Product Analysis", type="primary"):
     if not groq_api_key:
         st.error("Please enter a valid Groq API Key in the sidebar or Streamlit secrets to proceed.")
     elif not search_query.strip():
         st.warning("Please enter a product search query.")
     else:
-        with st.spinner("Executing 3-Node Agent Workflow (Scraper -> Analyzer -> Pricing Strategist)..."):
+        with st.spinner("Executing 3-Node Agent Workflow & Scoring Product Viability..."):
             try:
                 graph = build_workflow()
                 initial_state = AgentState(search_query=search_query)
@@ -399,6 +423,13 @@ if "current_analysis" in st.session_state:
     data: MarketAnalysis = st.session_state["current_analysis"]
     
     st.markdown("---")
+    
+    # Highlight Banner for Winning Products
+    if data.is_winning_product:
+        st.success(f"🚀 **WINNING PRODUCT DETECTED!** Viability Score: **{data.viability_score}/100** — High profit potential and clear market gap identified.")
+    else:
+        st.warning(f"⚠️ **Moderate Niche.** Viability Score: **{data.viability_score}/100** — Exercise caution or look for stronger differentiation.")
+
     col1, col2 = st.columns([2, 1])
     
     with col1:
