@@ -357,7 +357,7 @@ if "current_analysis" in st.session_state:
             
         st.subheader("⚠️ Key Cons & Market Gaps")
         for con in data.cons:
-            st.markdown(f- {con})
+            st.markdown(f"- {con}")
             
         st.subheader("💡 Strategic Recommendation")
         st.info(data.recommendation)
