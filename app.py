@@ -47,6 +47,7 @@ def init_db():
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_winning_product BOOLEAN;")
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS sourcing_info TEXT;")
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS social_trends TEXT;")
+        cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS branding_visuals TEXT;")
         
         conn.commit()
         cursor.close()
@@ -55,15 +56,15 @@ def init_db():
         st.error(f"Database initialization error: {e}")
 
 def save_report_to_db(data: "MarketAnalysis"):
-    """Saves a market analysis report, social intelligence, and sourcing metrics into the database."""
+    """Saves a comprehensive market report including design specifications to the database."""
     if not DB_URL:
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product, sourcing_info, social_trends)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product, sourcing_info, social_trends, branding_visuals)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             data.product_name,
             data.price_range,
@@ -74,7 +75,8 @@ def save_report_to_db(data: "MarketAnalysis"):
             data.viability_score,
             data.is_winning_product,
             data.sourcing_info,
-            data.social_trends
+            data.social_trends,
+            data.branding_visuals
         ))
         conn.commit()
         cursor.close()
@@ -182,32 +184,37 @@ class MarketAnalysis(BaseModel):
     is_winning_product: bool = Field(description="True if the product has strong profit margins, high demand, and fixable consumer complaints; false otherwise")
     sourcing_info: str = Field(default="", description="Manufacturing upgrades, supplier vetting instructions, and compliance requirements")
     social_trends: str = Field(default="", description="Social media trend analysis, creative video hooks, target audience insights, and platform breakdown")
+    branding_visuals: str = Field(default="", description="Brand identity concepts, logo ideas, color palette, premium carton packaging description, and Midjourney image prompts visualizing the upgraded product")
 
 class AgentState(BaseModel):
     search_query: str
     target_market: str = "US (Amazon.com)"
+    discovery_mode: str = "Amazon Best-Sellers (Validated)"
     scraped_content: str = ""
     analysis: MarketAnalysis = None
 
 
 # ==========================================
-# 3. LANGGRAPH 5-NODE PIPELINE
+# 3. LANGGRAPH 6-NODE PIPELINE
 # ==========================================
 def node_scraper(state: AgentState) -> dict:
-    """Node 1: Scrapes search results tailored to the selected target market domain."""
+    """Node 1: Scrapes web data tailored to either Amazon marketplace or Pre-Amazon social signals."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
     
-    market_domain = "amazon.com"
-    if "Germany" in state.target_market:
-        market_domain = "amazon.de"
-    elif "Emirates" in state.target_market:
-        market_domain = "amazon.ae"
-    elif "Saudi Arabia" in state.target_market:
-        market_domain = "amazon.sa"
+    if state.discovery_mode == "Pre-Amazon Social Trends (Early Arbitrage)":
+        search_query_str = f"{state.search_query} TikTok viral trend Reddit review problem hack OR shop"
+    else:
+        market_domain = "amazon.com"
+        if "Germany" in state.target_market:
+            market_domain = "amazon.de"
+        elif "Emirates" in state.target_market:
+            market_domain = "amazon.ae"
+        elif "Saudi Arabia" in state.target_market:
+            market_domain = "amazon.sa"
+        search_query_str = f"{state.search_query} {market_domain} reviews price specs best seller"
 
-    search_query_str = f"{state.search_query} {market_domain} reviews price specs best seller viral"
     search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(search_query_str)}"
     
     try:
@@ -221,7 +228,7 @@ def node_scraper(state: AgentState) -> dict:
     return {"scraped_content": scraped_text}
 
 def node_analyzer(state: AgentState) -> dict:
-    """Node 2: Analyzes scraped content with specific regional currency and market constraints."""
+    """Node 2: Analyzes scraped content with specific regional currency and discovery mode constraints."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.2)
     structured_llm = llm.with_structured_output(MarketAnalysis)
     
@@ -233,7 +240,15 @@ def node_analyzer(state: AgentState) -> dict:
     }
     local_currency = currency_map.get(state.target_market, "USD ($)")
 
+    mode_instructions = ""
+    if state.discovery_mode == "Pre-Amazon Social Trends (Early Arbitrage)":
+        mode_instructions = "DISCOVERY MODE: Pre-Amazon Social Trend. Evaluate viral social momentum (TikTok/Reddit/IG). Even if low on Amazon, score it based on viral demand potential and first-mover arbitrage opportunity."
+    else:
+        mode_instructions = "DISCOVERY MODE: Amazon Best-Seller Validation. Evaluate based on existing marketplace competition, review sentiment, and established demand."
+
     prompt = f"""You are an expert e-commerce market researcher and winning product hunter specialized in the **{state.target_market}** market.
+{mode_instructions}
+
 Analyze the following market research text for query: '{state.search_query}'.
 
 Scraped Content:
@@ -283,14 +298,8 @@ Product Analyzed: '{state.analysis.product_name}'
 Product Pros: {', '.join(state.analysis.pros)}
 Product Cons: {', '.join(state.analysis.cons)}
 
-Provide a structured Viral & Social Media Blueprint tailored specifically for **{state.target_market}**. 
+Provide a structured Viral & Social Media Blueprint tailored specifically for **{state.target_market}**. Use clean bullet lists and markdown headings (NO HTML tags and NO Markdown tables):
 
-STRICT FORMATTING RULES:
-- DO NOT use any Markdown tables (`| ... |`).
-- DO NOT use raw HTML tags like `<br>` or `<br/>`. Use standard line breaks.
-- Use clear headings and bullet points (`*` or `-`).
-
-Include:
 1. **Target Platform Priority**: Rank platforms (TikTok, Instagram, Snapchat, Reddit) based on user demographics and buying behavior in {state.target_market}.
 2. **Top 3 Viral Video Hooks**: Write 3 high-converting 3-second video opening hooks/scripts.
 3. **Hashtag & Keyword Strategy**: Suggest 5-6 top performing search terms/hashtags for TikTok Search & Meta Ad Library.
@@ -318,21 +327,47 @@ Provide an actionable Sourcing & Manufacturing Blueprint structured with clean m
     state.analysis.sourcing_info = clean_html_tags(res.content)
     return {"analysis": state.analysis}
 
+def node_design_strategist(state: AgentState) -> dict:
+    """Node 6: CRAFT detailed visual specs, branding concepts, and packaging briefs to differentiate."""
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.4)
+    
+    cons_context = ", ".join(state.analysis.cons)
+    
+    prompt = f"""You are an elite E-commerce Product Designer and Brand Identity Strategist.
+Product Category: '{state.analysis.product_name}'
+Price Tier Context: '{state.analysis.price_range}' (Target: {state.target_market})
+Customer Complaints to FIX via Design: {cons_context}
+
+Generate a Comprehensive Design & Branding Blueprint to make this a high-margin winning product candidate. Use clean bullet points and markdown headings (NO HTML tags, NO Markdown tables). Include:
+
+1. **Brand Identity & Position**: Suggest a premium Brand Name (suited for {state.target_market}) and a unique brand angle/story.
+2. **Visual Palette**: Define a specific color palette (with color names and hex codes) and an aesthetic mood.
+3. **Logo Concept**: Describe a unique logo mark and typography suitable for FBA branding.
+4. **Physical Product Visualization Description**: Describe the *enhanced* physical product based on fixing the complaints (materials, textures, finish, unique shape differentiation).
+5. **Carton & Packaging Brief**: Describe premium, gift-worthy retail packaging.
+6. **Detailed Midjourney Prompt**: Craft a 1-sentence, professional AI image prompt to generate a photo-realistic visualization of the *branded, upgraded product next to its premium packaging on a styled FBA backdrop*.
+"""
+    res = llm.invoke(prompt)
+    state.analysis.branding_visuals = clean_html_tags(res.content)
+    return {"analysis": state.analysis}
+
 def build_workflow():
-    """Builds and compiles the 5-node LangGraph execution graph."""
+    """Builds and compiles the 6-node LangGraph execution graph."""
     workflow = StateGraph(AgentState)
     workflow.add_node("scraper", node_scraper)
     workflow.add_node("analyzer", node_analyzer)
     workflow.add_node("strategist", node_pricing_strategist)
     workflow.add_node("social_analyst", node_social_trend_analyst)
     workflow.add_node("sourcing", node_sourcing_finder)
+    workflow.add_node("design_strategist", node_design_strategist)
 
     workflow.add_edge(START, "scraper")
     workflow.add_edge("scraper", "analyzer")
     workflow.add_edge("analyzer", "strategist")
     workflow.add_edge("strategist", "social_analyst")
     workflow.add_edge("social_analyst", "sourcing")
-    workflow.add_edge("sourcing", END)
+    workflow.add_edge("sourcing", "design_strategist")
+    workflow.add_edge("design_strategist", END)
 
     return workflow.compile()
 
@@ -388,6 +423,12 @@ def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
     for line in data.sourcing_info.split('\n'):
         if line.strip():
             story.append(Paragraph(clean_for_reportlab(line), body_style))
+    story.append(Spacer(1, 6))
+
+    story.append(Paragraph("Design & Branding Visualization Blueprint:", h2_style))
+    for line in data.branding_visuals.split('\n'):
+        if line.strip():
+            story.append(Paragraph(clean_for_reportlab(line), body_style))
             
     doc.build(story)
     buffer.seek(0)
@@ -410,6 +451,7 @@ def generate_csv(data: MarketAnalysis, target_market: str) -> bytes:
     writer.writerow(["Pricing Strategy", clean_for_csv(data.pricing_strategy)])
     writer.writerow(["Social Media Trends", clean_for_csv(data.social_trends)])
     writer.writerow(["Sourcing Blueprint", clean_for_csv(data.sourcing_info)])
+    writer.writerow(["Branding & Design Specification", clean_for_csv(data.branding_visuals)])
     
     return output.getvalue().encode('utf-8-sig')
 
@@ -435,6 +477,14 @@ groq_api_key = st.sidebar.text_input("Groq API Key", value=default_key, type="pa
 
 if groq_api_key:
     os.environ["GROQ_API_KEY"] = groq_api_key
+
+# Discovery Mode Toggle
+st.sidebar.markdown("---")
+st.sidebar.header("🔍 Discovery Mode")
+discovery_mode = st.sidebar.radio(
+    "Select intelligence source:",
+    ["Amazon Best-Sellers (Validated)", "Pre-Amazon Social Trends (Early Arbitrage)"]
+)
 
 # Target Market Selector
 st.sidebar.markdown("---")
@@ -477,17 +527,18 @@ if st.button("Run Winning Product Analysis", type="primary"):
     elif not search_query.strip():
         st.warning("Please enter a product search query.")
     else:
-        with st.spinner(f"Executing 5-Node Agent Workflow for {target_market}..."):
+        with st.spinner(f"Executing 6-Node Agent Workflow ({discovery_mode})..."):
             try:
                 graph = build_workflow()
-                initial_state = AgentState(search_query=search_query, target_market=target_market)
+                initial_state = AgentState(search_query=search_query, target_market=target_market, discovery_mode=discovery_mode)
                 final_output = graph.invoke(initial_state)
                 analysis: MarketAnalysis = final_output["analysis"]
                 
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
                 st.session_state["target_market"] = target_market
-                st.success(f"Analysis for {target_market} complete and archived!")
+                st.session_state["discovery_mode"] = discovery_mode
+                st.success(f"Analysis complete under mode: {discovery_mode} and archived!")
                 
             except Exception as e:
                 st.error(f"Error executing agent workflow: {str(e)}")
@@ -496,6 +547,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
 if "current_analysis" in st.session_state:
     data: MarketAnalysis = st.session_state["current_analysis"]
     current_market = st.session_state.get("target_market", target_market)
+    current_mode = st.session_state.get("discovery_mode", discovery_mode)
     
     st.markdown("---")
     
@@ -508,6 +560,7 @@ if "current_analysis" in st.session_state:
     
     with col1:
         st.header(f"📊 Market Report: {data.product_name}")
+        st.markdown(f"**Discovery Mode:** `{current_mode}`")
         st.markdown(f"**Target Marketplace:** `{current_market}`")
         st.markdown(f"**Estimated Price Range:** `{data.price_range}`")
         
@@ -530,6 +583,9 @@ if "current_analysis" in st.session_state:
         
         st.subheader("🏭 Alibaba & AliExpress Sourcing & Compliance Blueprint")
         st.markdown(data.sourcing_info)
+
+        st.subheader("🎨 Design & Branding Visualization Blueprint")
+        st.markdown(data.branding_visuals)
         
         st.markdown("#### 🔗 Direct Supplier Search Shortcuts")
         q_encoded = requests.utils.quote(data.product_name)
