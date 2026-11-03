@@ -1,9 +1,7 @@
 streamlit
+langchain-groq
 langgraph
 pydantic
-openai
-requests
 beautifulsoup4
+requests
 reportlab
-pandas
-typing-extensions
