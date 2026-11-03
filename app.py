@@ -46,6 +46,7 @@ def init_db():
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS viability_score INT;")
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_winning_product BOOLEAN;")
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS sourcing_info TEXT;")
+        cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS social_trends TEXT;")
         
         conn.commit()
         cursor.close()
@@ -54,15 +55,15 @@ def init_db():
         st.error(f"Database initialization error: {e}")
 
 def save_report_to_db(data: "MarketAnalysis"):
-    """Saves a market analysis report and sourcing metrics into the cloud PostgreSQL database."""
+    """Saves a market analysis report, social intelligence, and sourcing metrics into the database."""
     if not DB_URL:
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product, sourcing_info)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product, sourcing_info, social_trends)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             data.product_name,
             data.price_range,
@@ -72,7 +73,8 @@ def save_report_to_db(data: "MarketAnalysis"):
             data.pricing_strategy,
             data.viability_score,
             data.is_winning_product,
-            data.sourcing_info
+            data.sourcing_info,
+            data.social_trends
         ))
         conn.commit()
         cursor.close()
@@ -131,7 +133,7 @@ def clean_for_reportlab(text: str) -> str:
     return text
 
 def clean_for_csv(text: str) -> str:
-    """Strips markdown tables, formatting tags, and uses vertical newlines for clean spreadsheet viewing."""
+    """Strips formatting tags and normalizes text for CSV export."""
     if not text:
         return ""
     
@@ -171,6 +173,7 @@ class MarketAnalysis(BaseModel):
     viability_score: int = Field(description="Calculated score from 1 to 100 assessing overall market viability and winning product potential")
     is_winning_product: bool = Field(description="True if the product has strong profit margins, high demand, and fixable consumer complaints; false otherwise")
     sourcing_info: str = Field(default="", description="Manufacturing upgrades, supplier vetting instructions, and compliance requirements")
+    social_trends: str = Field(default="", description="Social media trend analysis, creative video hooks, target audience insights, and platform breakdown")
 
 class AgentState(BaseModel):
     search_query: str
@@ -180,7 +183,7 @@ class AgentState(BaseModel):
 
 
 # ==========================================
-# 3. LANGGRAPH 4-NODE PIPELINE
+# 3. LANGGRAPH 5-NODE PIPELINE
 # ==========================================
 def node_scraper(state: AgentState) -> dict:
     """Node 1: Scrapes search results tailored to the selected target market domain."""
@@ -196,7 +199,7 @@ def node_scraper(state: AgentState) -> dict:
     elif "Saudi Arabia" in state.target_market:
         market_domain = "amazon.sa"
 
-    search_query_str = f"{state.search_query} {market_domain} reviews price specs best seller"
+    search_query_str = f"{state.search_query} {market_domain} reviews price specs best seller viral"
     search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(search_query_str)}"
     
     try:
@@ -263,8 +266,28 @@ Follow the table with a few short bullet points for Quick Action Steps. Avoid La
     state.analysis.pricing_strategy = res.content
     return {"analysis": state.analysis}
 
+def node_social_trend_analyst(state: AgentState) -> dict:
+    """Node 4: Evaluates social media momentum (TikTok, IG, Snapchat, Reddit) for the target market."""
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
+    
+    prompt = f"""You are a Senior Social Media Trend Analyst and Viral Content Strategist specializing in e-commerce product discovery for **{state.target_market}**.
+Product Analyzed: '{state.analysis.product_name}'
+Product Pros: {', '.join(state.analysis.pros)}
+Product Cons: {', '.join(state.analysis.cons)}
+
+Provide a structured Viral & Social Media Blueprint tailored specifically for **{state.target_market}**. Use clean bullet lists and markdown headings (NO HTML tags, NO Markdown tables):
+
+1. **Target Platform Priority**: Rank platforms (TikTok, Instagram, Snapchat, Reddit) based on user demographics and buying behavior in {state.target_market}.
+2. **Top 3 Viral Video Hooks**: Write 3 high-converting 3-second video opening hooks/scripts (e.g., "Stop doing X...", "If you have [Problem] watch this...", "Amazon find that solved X").
+3. **Hashtag & Keyword Strategy**: Suggest 5-6 top performing search terms/hashtags for TikTok Search & Meta Ad Library.
+4. **Community Sentiment Insights**: Highlight what users in subreddits or comment sections typically look for regarding this product category.
+"""
+    res = llm.invoke(prompt)
+    state.analysis.social_trends = res.content
+    return {"analysis": state.analysis}
+
 def node_sourcing_finder(state: AgentState) -> dict:
-    """Node 4: Generates clean markdown bullet lists for manufacturing upgrades and compliance."""
+    """Node 5: Generates manufacturing upgrades and compliance advice tailored for the target market."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     cons_text = ', '.join(state.analysis.cons)
@@ -272,7 +295,7 @@ def node_sourcing_finder(state: AgentState) -> dict:
 Target Product: '{state.analysis.product_name}'
 Identified Customer Complaints/Cons to Fix: {cons_text}
 
-Provide an actionable Sourcing & Manufacturing Blueprint structured with clean markdown bullet points and headings (NO HTML tags like <br> and NO Markdown tables). Include:
+Provide an actionable Sourcing & Manufacturing Blueprint structured with clean markdown bullet points and headings (NO HTML tags and NO Markdown tables). Include:
 1. **Supplier Quality Upgrades**: Specific engineering or material instructions to give Chinese suppliers to fix consumer complaints.
 2. **Import & Compliance Requirements**: Essential certifications for importing into {state.target_market} (e.g., SASO/Saber certification and Arabic labeling for Saudi Arabia, CE marks for Europe, local voltage/plug standards).
 3. **Vetting & Sample Checklist**: Key questions to ask suppliers regarding Trade Assurance, sample testing, and quality control.
@@ -282,17 +305,19 @@ Provide an actionable Sourcing & Manufacturing Blueprint structured with clean m
     return {"analysis": state.analysis}
 
 def build_workflow():
-    """Builds and compiles the 4-node LangGraph execution graph."""
+    """Builds and compiles the 5-node LangGraph execution graph."""
     workflow = StateGraph(AgentState)
     workflow.add_node("scraper", node_scraper)
     workflow.add_node("analyzer", node_analyzer)
     workflow.add_node("strategist", node_pricing_strategist)
+    workflow.add_node("social_analyst", node_social_trend_analyst)
     workflow.add_node("sourcing", node_sourcing_finder)
 
     workflow.add_edge(START, "scraper")
     workflow.add_edge("scraper", "analyzer")
     workflow.add_edge("analyzer", "strategist")
-    workflow.add_edge("strategist", "sourcing")
+    workflow.add_edge("strategist", "social_analyst")
+    workflow.add_edge("social_analyst", "sourcing")
     workflow.add_edge("sourcing", END)
 
     return workflow.compile()
@@ -302,7 +327,7 @@ def build_workflow():
 # 4. EXPORT GENERATORS (PDF & CSV)
 # ==========================================
 def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
-    """Generates a structured, clean PDF report with native ReportLab tables."""
+    """Generates a structured, clean PDF report with native ReportLab formatting."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     styles = getSampleStyleSheet()
@@ -310,8 +335,6 @@ def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
     title_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontSize=16, leading=20, spaceAfter=10)
     h2_style = ParagraphStyle('ReportH2', parent=styles['Heading2'], fontSize=12, leading=16, spaceBefore=8, spaceAfter=4)
     body_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontSize=9, leading=13, spaceAfter=3)
-    table_cell_style = ParagraphStyle('TableCell', parent=styles['Normal'], fontSize=8, leading=11)
-    table_header_style = ParagraphStyle('TableHeader', parent=styles['Normal'], fontSize=8, leading=11, fontName="Helvetica-Bold", textColor=colors.whitesmoke)
     
     status_text = "WINNING PRODUCT CANDIDATE 🚀" if data.is_winning_product else "Standard Niche"
     
@@ -340,6 +363,12 @@ def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
         if line.strip():
             story.append(Paragraph(clean_for_reportlab(line), body_style))
     story.append(Spacer(1, 6))
+
+    story.append(Paragraph("Viral & Social Media Intelligence:", h2_style))
+    for line in data.social_trends.split('\n'):
+        if line.strip():
+            story.append(Paragraph(clean_for_reportlab(line), body_style))
+    story.append(Spacer(1, 6))
     
     story.append(Paragraph("Manufacturing & Compliance Blueprint:", h2_style))
     for line in data.sourcing_info.split('\n'):
@@ -365,6 +394,7 @@ def generate_csv(data: MarketAnalysis, target_market: str) -> bytes:
     writer.writerow(["Key Cons", " \n ".join([clean_for_csv(c) for c in data.cons])])
     writer.writerow(["Strategic Recommendation", clean_for_csv(data.recommendation)])
     writer.writerow(["Pricing Strategy", clean_for_csv(data.pricing_strategy)])
+    writer.writerow(["Social Media Trends", clean_for_csv(data.social_trends)])
     writer.writerow(["Sourcing Blueprint", clean_for_csv(data.sourcing_info)])
     
     return output.getvalue().encode('utf-8-sig')
@@ -433,7 +463,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
     elif not search_query.strip():
         st.warning("Please enter a product search query.")
     else:
-        with st.spinner(f"Executing 4-Node Agent Workflow for {target_market}..."):
+        with st.spinner(f"Executing 5-Node Agent Workflow for {target_market} (Scraper -> Analyzer -> Strategist -> Social Trends -> Sourcing)..."):
             try:
                 graph = build_workflow()
                 initial_state = AgentState(search_query=search_query, target_market=target_market)
@@ -443,7 +473,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
                 st.session_state["target_market"] = target_market
-                st.success(f"Analysis for {target_market} complete, sourcing blueprint generated, and archived!")
+                st.success(f"Analysis for {target_market} complete, social trends mapped, and archived!")
                 
             except Exception as e:
                 st.error(f"Error executing agent workflow: {str(e)}")
@@ -480,6 +510,9 @@ if "current_analysis" in st.session_state:
         
         st.subheader("🎯 Pricing & Margin Strategy")
         st.markdown(data.pricing_strategy)
+        
+        st.subheader("📱 Viral & Social Media Trend Blueprint")
+        st.markdown(data.social_trends)
         
         st.subheader("🏭 Alibaba & AliExpress Sourcing & Compliance Blueprint")
         st.markdown(data.sourcing_info)
