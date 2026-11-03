@@ -316,10 +316,10 @@ def _build_reportlab_table(raw_rows, header_style, cell_style):
     return t
 
 def generate_csv(data: MarketAnalysis) -> bytes:
-    """Generates a clean, fully-quoted CSV bytes object with UTF-8 BOM for strict 2-column Excel layout."""
+    """Generates a clean, structured semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
     output = StringIO()
-    # Use standard comma delimiter with QUOTE_ALL to prevent internal semicolons/commas from splitting columns
-    writer = csv.writer(output, delimiter=',', quoting=csv.QUOTE_ALL)
+    # Use semicolon delimiter with minimal quoting so Excel parses columns natively
+    writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
     
     writer.writerow(["Report Section", "Content Details"])
     writer.writerow(["Product Name", clean_for_csv(data.product_name)])
@@ -330,7 +330,6 @@ def generate_csv(data: MarketAnalysis) -> bytes:
     writer.writerow(["Pricing & Margin Strategy", clean_for_csv(data.pricing_strategy)])
     
     return output.getvalue().encode('utf-8-sig')
-
 
 # ==========================================
 # 5. STREAMLIT UI APPLICATION
