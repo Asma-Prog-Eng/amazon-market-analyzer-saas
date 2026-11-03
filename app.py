@@ -162,17 +162,18 @@ def clean_for_csv(text: str) -> str:
 # ==========================================
 class MarketAnalysis(BaseModel):
     product_name: str = Field(description="Name or category of the analyzed product")
-    price_range: str = Field(description="Observed market price range (e.g. '$25 - $45')")
+    price_range: str = Field(description="Observed market price range with local currency symbol")
     pros: List[str] = Field(description="Key strengths and advantages identified")
     cons: List[str] = Field(description="Common complaints, weaknesses, or market gaps")
     recommendation: str = Field(description="Strategic recommendation for entering or scaling in this market")
     pricing_strategy: str = Field(description="Detailed pricing strategy, margins, and tier structure")
     viability_score: int = Field(description="Calculated score from 1 to 100 assessing overall market viability and winning product potential")
     is_winning_product: bool = Field(description="True if the product has strong profit margins, high demand, and fixable consumer complaints; false otherwise")
-    sourcing_info: str = Field(default="", description="Alibaba/AliExpress search queries, direct sourcing links, and manufacturing upgrade recommendations based on product cons")
+    sourcing_info: str = Field(default="", description="Alibaba/AliExpress search queries, direct sourcing links, and manufacturing upgrade recommendations")
 
 class AgentState(BaseModel):
     search_query: str
+    target_market: str = "US (Amazon.com)"
     scraped_content: str = ""
     analysis: MarketAnalysis = None
 
@@ -181,11 +182,22 @@ class AgentState(BaseModel):
 # 3. LANGGRAPH 4-NODE PIPELINE
 # ==========================================
 def node_scraper(state: AgentState) -> dict:
-    """Node 1: Scrapes search results / web content for the query."""
+    """Node 1: Scrapes search results tailored to the selected target market domain."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
-    search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(state.search_query + ' amazon reviews price specs best seller')}"
+    
+    # Determine domain context based on target market
+    market_domain = "amazon.com"
+    if "Germany" in state.target_market:
+        market_domain = "amazon.de"
+    elif "Emirates" in state.target_market:
+        market_domain = "amazon.ae"
+    elif "Saudi Arabia" in state.target_market:
+        market_domain = "amazon.sa"
+
+    search_query_str = f"{state.search_query} {market_domain} reviews price specs best seller"
+    search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(search_query_str)}"
     
     try:
         res = requests.get(search_url, headers=headers, timeout=10)
@@ -198,24 +210,35 @@ def node_scraper(state: AgentState) -> dict:
     return {"scraped_content": scraped_text}
 
 def node_analyzer(state: AgentState) -> dict:
-    """Node 2: Analyzes scraped content into structured Pydantic format with winning score calculation."""
+    """Node 2: Analyzes scraped content with specific regional currency and market constraints."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.2)
     structured_llm = llm.with_structured_output(MarketAnalysis)
     
-    prompt = f"""You are an expert e-commerce market researcher and winning product hunter.
+    currency_map = {
+        "US (Amazon.com)": "USD ($)",
+        "Germany (Amazon.de)": "EUR (€)",
+        "Emirates (Amazon.ae)": "AED (AED)",
+        "Saudi Arabia (Amazon.sa)": "SAR (SAR)"
+    }
+    local_currency = currency_map.get(state.target_market, "USD ($)")
+
+    prompt = f"""You are an expert e-commerce market researcher and winning product hunter specialized in the **{state.target_market}** market.
 Analyze the following market research text for query: '{state.search_query}'.
 
 Scraped Content:
 {state.scraped_content}
 
-CRITICAL INSTRUCTION: If the query is broad, select the single most prominent, trending product category or item within that space to analyze deeply.
+CRITICAL INSTRUCTIONS:
+1. If the query is broad, select the single most prominent, trending product category or item within that space to analyze deeply.
+2. All price ranges and financial figures MUST use the local currency: {local_currency}.
+3. Tailor the analysis specifically to consumer behavior, competition levels, and pricing expectations in {state.target_market}.
 
 Provide a structured analysis containing:
 1. Product name/category (specific item)
-2. Estimated price range
+2. Estimated price range (using {local_currency})
 3. Top 3-5 pros/strengths
-4. Top 3-5 cons/complaints/gaps (look for fixable product flaws)
-5. Strategic recommendation
+4. Top 3-5 cons/complaints/gaps
+5. Strategic recommendation for {state.target_market}
 6. Initial baseline pricing approach
 7. Viability score (1-100 scale)
 8. Boolean flag determining if this is a high-potential winning product
@@ -224,16 +247,16 @@ Provide a structured analysis containing:
     return {"analysis": result}
 
 def node_pricing_strategist(state: AgentState) -> dict:
-    """Node 3: Refines and expands the pricing strategy in the analysis."""
+    """Node 3: Refines and expands the pricing strategy for the target region."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
-    prompt = f"""You are a senior Amazon Pricing Strategist.
+    prompt = f"""You are a senior Amazon Pricing Strategist for the **{state.target_market}** marketplace.
 Review the market analysis below for product '{state.analysis.product_name}' (Price range: {state.analysis.price_range}, Viability Score: {state.analysis.viability_score}/100).
 
 Existing Pros: {', '.join(state.analysis.pros)}
 Existing Cons: {', '.join(state.analysis.cons)}
 
-Write a comprehensive pricing strategy. Format key data points into a clean Markdown table with columns: | Element | Recommendation | Rationale |.
+Write a comprehensive pricing strategy suited for {state.target_market} (including local VAT/tax considerations, FBA fulfillment estimates, and competitive tiering). Format key data points into a clean Markdown table with columns: | Element | Recommendation | Rationale |.
 Follow the table with a few short bullet points for Quick Action Steps. Avoid LaTeX math symbols.
 """
     res = llm.invoke(prompt)
@@ -241,18 +264,18 @@ Follow the table with a few short bullet points for Quick Action Steps. Avoid La
     return {"analysis": state.analysis}
 
 def node_sourcing_finder(state: AgentState) -> dict:
-    """Node 4: Generates Alibaba/AliExpress sourcing advice, search links, and manufacturing fixes based on Cons."""
+    """Node 4: Generates Alibaba/AliExpress sourcing advice tailored for importing into the target market."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     cons_text = ', '.join(state.analysis.cons)
-    prompt = f"""You are an expert Global Sourcing & Supply Chain Manager for e-commerce.
+    prompt = f"""You are an expert Global Sourcing & Supply Chain Manager supplying e-commerce sellers targeting **{state.target_market}**.
 Target Product: '{state.analysis.product_name}'
 Identified Customer Complaints/Cons to Fix: {cons_text}
 
 Provide an actionable Sourcing & Supplier Blueprint containing:
 1. **Top Alibaba Search Keywords**: 3-4 precise English and industry search terms.
 2. **Direct Sourcing Search Links**: Markdown hyperlinks formatted as `[Search Alibaba for Product Name](https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&SearchText=QUERY)` and `[Search AliExpress for Product Name](https://www.aliexpress.com/w/wholesale-QUERY.html)`.
-3. **Supplier Quality Upgrades**: Specific manufacturing instructions to give Chinese suppliers to fix the identified customer complaints (e.g., thicker material, upgraded stitching, reinforced hinge).
+3. **Supplier Quality Upgrades & Import Compliance**: Specific manufacturing instructions to fix consumer complaints and compliance considerations for importing into {state.target_market} (e.g., CE marks for Europe/Germany, Saber/SASO for Saudi Arabia, local electrical plugs/standards).
 
 Format your response cleanly with markdown headers and bullet points.
 """
@@ -280,7 +303,7 @@ def build_workflow():
 # ==========================================
 # 4. EXPORT GENERATORS (PDF & CSV)
 # ==========================================
-def generate_pdf(data: MarketAnalysis) -> bytes:
+def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
     """Generates a structured, clean PDF report with native ReportLab tables."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
@@ -295,7 +318,7 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     status_text = "WINNING PRODUCT CANDIDATE 🚀" if data.is_winning_product else "Standard Niche"
     
     story = [
-        Paragraph(clean_for_reportlab(f"Amazon Market Report: {data.product_name}"), title_style),
+        Paragraph(clean_for_reportlab(f"Amazon Market Report ({target_market}): {data.product_name}"), title_style),
         Paragraph(clean_for_reportlab(f"<b>Viability Score:</b> {data.viability_score}/100 ({status_text})"), body_style),
         Paragraph(clean_for_reportlab(f"<b>Estimated Price Range:</b> {data.price_range}"), body_style),
         Spacer(1, 8),
@@ -329,12 +352,13 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     buffer.seek(0)
     return buffer.getvalue()
 
-def generate_csv(data: MarketAnalysis) -> bytes:
+def generate_csv(data: MarketAnalysis, target_market: str) -> bytes:
     """Generates a clean, semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
     output = StringIO()
     writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
     
     writer.writerow(["Report Section", "Content Details"])
+    writer.writerow(["Target Market", target_market])
     writer.writerow(["Product Name", clean_for_csv(data.product_name)])
     writer.writerow(["Viability Score", f"{data.viability_score}/100"])
     writer.writerow(["Is Winning Product", str(data.is_winning_product)])
@@ -370,6 +394,14 @@ groq_api_key = st.sidebar.text_input("Groq API Key", value=default_key, type="pa
 if groq_api_key:
     os.environ["GROQ_API_KEY"] = groq_api_key
 
+# Target Market Selector
+st.sidebar.markdown("---")
+st.sidebar.header("🌍 Target Market")
+target_market = st.sidebar.selectbox(
+    "Select region/marketplace:",
+    ["US (Amazon.com)", "Germany (Amazon.de)", "Emirates (Amazon.ae)", "Saudi Arabia (Amazon.sa)"]
+)
+
 # Quick Trending Niche Picker
 st.sidebar.markdown("---")
 st.sidebar.header("🚀 Quick Trending Niches")
@@ -403,16 +435,17 @@ if st.button("Run Winning Product Analysis", type="primary"):
     elif not search_query.strip():
         st.warning("Please enter a product search query.")
     else:
-        with st.spinner("Executing 4-Node Agent Workflow (Scraper -> Analyzer -> Strategist -> Sourcing Finder)..."):
+        with st.spinner(f"Executing 4-Node Agent Workflow for {target_market}..."):
             try:
                 graph = build_workflow()
-                initial_state = AgentState(search_query=search_query)
+                initial_state = AgentState(search_query=search_query, target_market=target_market)
                 final_output = graph.invoke(initial_state)
                 analysis: MarketAnalysis = final_output["analysis"]
                 
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
-                st.success("Analysis complete, suppliers mapped, and archived to Supabase database!")
+                st.session_state["target_market"] = target_market
+                st.success(f"Analysis for {target_market} complete, suppliers mapped, and archived!")
                 
             except Exception as e:
                 st.error(f"Error executing agent workflow: {str(e)}")
@@ -420,19 +453,21 @@ if st.button("Run Winning Product Analysis", type="primary"):
 # Display Results if available in session state
 if "current_analysis" in st.session_state:
     data: MarketAnalysis = st.session_state["current_analysis"]
+    current_market = st.session_state.get("target_market", target_market)
     
     st.markdown("---")
     
     # Highlight Banner for Winning Products
     if data.is_winning_product:
-        st.success(f"🚀 **WINNING PRODUCT DETECTED!** Viability Score: **{data.viability_score}/100** — High profit potential and clear market gap identified.")
+        st.success(f"🚀 **WINNING PRODUCT DETECTED FOR {current_market.upper()}!** Viability Score: **{data.viability_score}/100** — High profit potential and clear market gap identified.")
     else:
-        st.warning(f"⚠️ **Moderate Niche.** Viability Score: **{data.viability_score}/100** — Exercise caution or look for stronger differentiation.")
+        st.warning(f"⚠️ **Moderate Niche in {current_market}.** Viability Score: **{data.viability_score}/100** — Exercise caution or look for stronger differentiation.")
 
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.header(f"📊 Market Report: {data.product_name}")
+        st.markdown(f"**Target Marketplace:** `{current_market}`")
         st.markdown(f"**Estimated Price Range:** `{data.price_range}`")
         
         st.subheader("✅ Key Pros")
@@ -455,20 +490,20 @@ if "current_analysis" in st.session_state:
     with col2:
         st.header("📥 Export Market Report")
         
-        pdf_bytes = generate_pdf(data)
+        pdf_bytes = generate_pdf(data, current_market)
         st.download_button(
             label="📄 Download PDF Report",
             data=pdf_bytes,
-            file_name=f"{data.product_name.replace(' ', '_')}_market_report.pdf",
+            file_name=f"{data.product_name.replace(' ', '_')}_{current_market[:2]}_report.pdf",
             mime="application/pdf",
             use_container_width=True
         )
         
-        csv_bytes = generate_csv(data)
+        csv_bytes = generate_csv(data, current_market)
         st.download_button(
             label="📊 Download CSV Data (Excel-friendly)",
             data=csv_bytes,
-            file_name=f"{data.product_name.replace(' ', '_')}_market_report.csv",
+            file_name=f"{data.product_name.replace(' ', '_')}_{current_market[:2]}_report.csv",
             mime="text/csv",
             use_container_width=True
         )
