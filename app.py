@@ -108,7 +108,7 @@ def clean_html_tags(text: str) -> str:
     return text
 
 def clean_for_reportlab(text: str) -> str:
-    """Sanitizes text, strips LaTeX math notation, and normalizes characters for ReportLab PDF compatibility."""
+    """Sanitizes text, strips LaTeX, markdown, and tags for foolproof ReportLab PDF compatibility."""
     if not text:
         return ""
     
@@ -117,6 +117,13 @@ def clean_for_reportlab(text: str) -> str:
     text = text.replace(r'\%', '%')
     text = text.replace('\\', '')
     text = re.sub(r'<\s*br\s*/?\s*>', ' ', text, flags=re.IGNORECASE)
+    
+    # Strip markdown bold/italics completely to prevent parser tag mismatches
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    
+    # Strip all HTML tags completely for PDF safety
+    text = re.sub(r'<[^>]+>', '', text)
     
     dash_variants = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u00ad']
     for char in dash_variants:
@@ -136,9 +143,6 @@ def clean_for_reportlab(text: str) -> str:
         text = text.replace(char, '"')
         
     text = text.replace('\u00a0', ' ').replace('\u202f', ' ')
-
-    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'</?\s*(?!b|i|u|br)\w+\b[^>]*>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
     return text
 
@@ -409,8 +413,8 @@ def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
     
     story = [
         Paragraph(clean_for_reportlab(f"Amazon Market Report ({target_market}): {data.product_name}"), title_style),
-        Paragraph(clean_for_reportlab(f"<b>Viability Score:</b> {data.viability_score}/100 ({status_text})"), body_style),
-        Paragraph(clean_for_reportlab(f"<b>Estimated Price Range:</b> {data.price_range}"), body_style),
+        Paragraph(clean_for_reportlab(f"Viability Score: {data.viability_score}/100 ({status_text})"), body_style),
+        Paragraph(clean_for_reportlab(f"Estimated Price Range: {data.price_range}"), body_style),
         Spacer(1, 8),
         Paragraph("Key Advantages (Pros):", h2_style)
     ]
