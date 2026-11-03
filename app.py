@@ -169,7 +169,7 @@ class MarketAnalysis(BaseModel):
     pricing_strategy: str = Field(description="Detailed pricing strategy, margins, and tier structure")
     viability_score: int = Field(description="Calculated score from 1 to 100 assessing overall market viability and winning product potential")
     is_winning_product: bool = Field(description="True if the product has strong profit margins, high demand, and fixable consumer complaints; false otherwise")
-    sourcing_info: str = Field(default="", description="Alibaba/AliExpress search queries, direct sourcing links, and manufacturing upgrade recommendations")
+    sourcing_info: str = Field(default="", description="Manufacturing upgrades, supplier vetting instructions, and compliance requirements")
 
 class AgentState(BaseModel):
     search_query: str
@@ -263,7 +263,7 @@ Follow the table with a few short bullet points for Quick Action Steps. Avoid La
     return {"analysis": state.analysis}
 
 def node_sourcing_finder(state: AgentState) -> dict:
-    """Node 4: Generates clean HTML anchor tag links for Alibaba & AliExpress sourcing."""
+    """Node 4: Generates manufacturing upgrades and compliance advice tailored for the target market."""
     llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
     
     cons_text = ', '.join(state.analysis.cons)
@@ -271,12 +271,12 @@ def node_sourcing_finder(state: AgentState) -> dict:
 Target Product: '{state.analysis.product_name}'
 Identified Customer Complaints/Cons to Fix: {cons_text}
 
-Provide an actionable Sourcing & Supplier Blueprint containing:
-1. **Top Alibaba Search Keywords**: 3-4 precise search terms.
-2. **Direct Sourcing Links**: You MUST format direct links using standard HTML anchor tags so they render as clickable links. Example: `<a href="https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&SearchText=EXACT_KEYWORD" target="_blank">Search Alibaba for EXACT_KEYWORD</a>` and `<a href="https://www.aliexpress.com/w/wholesale-EXACT_KEYWORD.html" target="_blank">Search AliExpress for EXACT_KEYWORD</a>`.
-3. **Supplier Quality Upgrades & Import Compliance**: Specific manufacturing instructions to fix consumer complaints and compliance considerations for importing into {state.target_market} (e.g., SASO/Saber certification for Saudi Arabia, CE marks for Europe, local voltage/plug standards).
+Provide an actionable Sourcing & Manufacturing Blueprint containing:
+1. **Supplier Quality Upgrades**: Specific engineering or material instructions to give Chinese suppliers to fix the identified consumer complaints.
+2. **Import & Compliance Requirements**: Essential certifications for importing into {state.target_market} (e.g., SASO/Saber certification and Arabic labeling for Saudi Arabia, CE marks for Europe, local voltage/plug standards).
+3. **Vetting Checklist**: Key questions to ask suppliers regarding Trade Assurance and sample testing.
 
-Format your response cleanly with markdown headers and bullet points.
+Format your response cleanly with markdown headers and bullet points. Do not include raw HTML link tags.
 """
     res = llm.invoke(prompt)
     state.analysis.sourcing_info = res.content
@@ -342,10 +342,8 @@ def generate_pdf(data: MarketAnalysis, target_market: str) -> bytes:
             story.append(Paragraph(clean_for_reportlab(line), body_style))
     story.append(Spacer(1, 6))
     
-    story.append(Paragraph("Alibaba & AliExpress Sourcing Blueprint:", h2_style))
-    # Strip HTML tags for clean PDF rendering
-    clean_sourcing = re.sub(r'<[^>]+>', '', data.sourcing_info)
-    for line in clean_sourcing.split('\n'):
+    story.append(Paragraph("Manufacturing & Compliance Blueprint:", h2_style))
+    for line in data.sourcing_info.split('\n'):
         if line.strip():
             story.append(Paragraph(clean_for_reportlab(line), body_style))
             
@@ -397,114 +395,3 @@ if groq_api_key:
 
 # Target Market Selector
 st.sidebar.markdown("---")
-st.sidebar.header("🌍 Target Market")
-target_market = st.sidebar.selectbox(
-    "Select region/marketplace:",
-    ["US (Amazon.com)", "Germany (Amazon.de)", "Emirates (Amazon.ae)", "Saudi Arabia (Amazon.sa)"]
-)
-
-# Quick Trending Niche Picker
-st.sidebar.markdown("---")
-st.sidebar.header("🚀 Quick Trending Niches")
-preset_niche = st.sidebar.selectbox(
-    "Select to auto-fill query:",
-    ["-- Custom Input --", "Wireless Ergonomic Mouse", "Smart Plant Waterer", "Posture Correction Brace", "Portable Blender Bottle"]
-)
-
-# Historical Reports Accordion in Sidebar
-st.sidebar.markdown("---")
-st.sidebar.header("📜 Saved Reports History")
-history_rows = fetch_history()
-if history_rows:
-    for row in history_rows[:5]:
-        r_id = row[0]
-        r_time = str(row[1])[:10] if row[1] else "N/A"
-        r_prod = row[2] if len(row) > 2 and row[2] else "Unknown"
-        r_score = row[4] if len(row) > 4 and row[4] is not None else "??"
-        r_win = "🚀" if len(row) > 5 and row[5] else ""
-        st.sidebar.caption(f"**ID #{r_id}** {r_win} ({r_score}/100) | {r_prod}")
-else:
-    st.sidebar.caption("No archived reports found.")
-
-# Main Form Input
-default_query = preset_niche if preset_niche != "-- Custom Input --" else ""
-search_query = st.text_input("Product Search Query", value=default_query, placeholder="e.g. Wireless Ergonomic Mouse, Mechanical Keyboard")
-
-if st.button("Run Winning Product Analysis", type="primary"):
-    if not groq_api_key:
-        st.error("Please enter a valid Groq API Key in the sidebar or Streamlit secrets to proceed.")
-    elif not search_query.strip():
-        st.warning("Please enter a product search query.")
-    else:
-        with st.spinner(f"Executing 4-Node Agent Workflow for {target_market}..."):
-            try:
-                graph = build_workflow()
-                initial_state = AgentState(search_query=search_query, target_market=target_market)
-                final_output = graph.invoke(initial_state)
-                analysis: MarketAnalysis = final_output["analysis"]
-                
-                save_report_to_db(analysis)
-                st.session_state["current_analysis"] = analysis
-                st.session_state["target_market"] = target_market
-                st.success(f"Analysis for {target_market} complete, suppliers mapped, and archived!")
-                
-            except Exception as e:
-                st.error(f"Error executing agent workflow: {str(e)}")
-
-# Display Results if available in session state
-if "current_analysis" in st.session_state:
-    data: MarketAnalysis = st.session_state["current_analysis"]
-    current_market = st.session_state.get("target_market", target_market)
-    
-    st.markdown("---")
-    
-    if data.is_winning_product:
-        st.success(f"🚀 **WINNING PRODUCT DETECTED FOR {current_market.upper()}!** Viability Score: **{data.viability_score}/100** — High profit potential and clear market gap identified.")
-    else:
-        st.warning(f"⚠️ **Moderate Niche in {current_market}.** Viability Score: **{data.viability_score}/100** — Exercise caution or look for stronger differentiation.")
-
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.header(f"📊 Market Report: {data.product_name}")
-        st.markdown(f"**Target Marketplace:** `{current_market}`")
-        st.markdown(f"**Estimated Price Range:** `{data.price_range}`")
-        
-        st.subheader("✅ Key Pros")
-        for pro in data.pros:
-            st.markdown(f"- {pro}")
-            
-        st.subheader("⚠️ Key Cons & Market Gaps")
-        for con in data.cons:
-            st.markdown(f"- {con}")
-            
-        st.subheader("💡 Strategic Recommendation")
-        st.info(data.recommendation)
-        
-        st.subheader("🎯 Pricing & Margin Strategy")
-        st.markdown(data.pricing_strategy)
-        
-        st.subheader("🏭 Alibaba & AliExpress Sourcing Blueprint")
-        # Use st.markdown with unsafe_allow_html=True so the HTML links render as clickable elements!
-        st.markdown(data.sourcing_info, unsafe_allow_html=True)
-        
-    with col2:
-        st.header("📥 Export Market Report")
-        
-        pdf_bytes = generate_pdf(data, current_market)
-        st.download_button(
-            label="📄 Download PDF Report",
-            data=pdf_bytes,
-            file_name=f"{data.product_name.replace(' ', '_')}_{current_market[:2]}_report.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-        
-        csv_bytes = generate_csv(data, current_market)
-        st.download_button(
-            label="📊 Download CSV Data (Excel-friendly)",
-            data=csv_bytes,
-            file_name=f"{data.product_name.replace(' ', '_')}_{current_market[:2]}_report.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
