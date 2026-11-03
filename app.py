@@ -71,9 +71,18 @@ def fetch_history():
     return rows
 
 def clean_for_reportlab(text: str) -> str:
-    """Sanitizes text for ReportLab Paragraph XML parsing."""
+    """Sanitizes text and normalizes unicode characters for ReportLab PDF compatibility."""
     if not text:
         return ""
+    # Normalize unicode dashes, minus signs, and smart quotes to standard ASCII
+    text = (text.replace('\u2013', '-')
+                .replace('\u2014', '-')
+                .replace('\u2212', '-')
+                .replace('\u2018', "'")
+                .replace('\u2019', "'")
+                .replace('\u201c', '"')
+                .replace('\u201d', '"'))
+    
     # Replace markdown bold **text** with ReportLab XML <b>text</b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     # Replace any form of <br> with strict ReportLab self-closing <br/>
@@ -212,7 +221,6 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     
     story.append(Paragraph("Pricing & Margin Strategy:", h2_style))
     
-    # Parse strategy text and convert markdown tables into real ReportLab Table flowables
     strategy_lines = data.pricing_strategy.split('\n')
     table_rows = []
     
@@ -220,15 +228,12 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
         line_str = line.strip()
         if not line_str:
             continue
-        # Check if line is part of a markdown table
         if line_str.startswith('|') and line_str.endswith('|'):
             cells = [c.strip() for c in line_str.split('|')[1:-1]]
-            # Skip divider rows like |---|---|---|
             if all(re.match(r'^[\-\:]+$', c) for c in cells if c):
                 continue
             table_rows.append(cells)
         else:
-            # If we were building a table and hit non-table text, flush the table first
             if table_rows:
                 story.append(_build_reportlab_table(table_rows, table_header_style, table_cell_style))
                 story.append(Spacer(1, 6))
@@ -236,7 +241,6 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
             story.append(Paragraph(clean_for_reportlab(line_str), body_style))
             story.append(Spacer(1, 2))
             
-    # Flush remaining table if any
     if table_rows:
         story.append(_build_reportlab_table(table_rows, table_header_style, table_cell_style))
     
@@ -276,7 +280,6 @@ def generate_csv(data: MarketAnalysis) -> str:
     writer.writerow(["Key Cons", " | ".join(data.cons)])
     writer.writerow(["Strategic Recommendation", data.recommendation])
     
-    # Clean pricing strategy line breaks for spreadsheet compatibility
     clean_strategy = data.pricing_strategy.replace('\n', ' -- ')
     writer.writerow(["Pricing & Margin Strategy", clean_strategy])
     return output.getvalue()
