@@ -136,8 +136,11 @@ def clean_for_csv(text: str) -> str:
         line_str = re.sub(r'<[^>]+>', ' ', line_str)
         
         cleaned_lines.append(line_str)
-        
-    return " | ".join(cleaned_lines)
+
+    # Join with actual newlines so Excel stacks them vertically within the cell
+    return "\n".join(cleaned_lines)
+
+
 
 
 # ==========================================
