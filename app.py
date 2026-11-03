@@ -93,19 +93,34 @@ def clean_for_reportlab(text: str) -> str:
     return text
 
 def clean_for_csv(text: str) -> str:
-    """Strips markdown and normalizes text for clean spreadsheet viewing."""
+    """Strips markdown tables, formatting tags, and normalizes text for clean spreadsheet viewing."""
     if not text:
         return ""
-    # Remove markdown bold/italics
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    # Normalize unicode dashes
-    for char in ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212']:
-        text = text.replace(char, '-')
-    # Flatten newlines into separators for clean row cells
-    text = text.replace('\n', ' -- ').replace('\r', '')
-    return text
-
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        # Skip markdown table divider lines like |---|---|
+        if re.match(r'^[\|\-\:\s]+$', line_str):
+            continue
+        # Convert table rows with pipes into clean arrow-separated text
+        if line_str.startswith('|') and line_str.endswith('|'):
+            cells = [c.strip() for c in line_str.split('|')[1:-1] if c.strip()]
+            line_str = " -> ".join(cells)
+            
+        # Remove markdown bold/italics/headers
+        line_str = re.sub(r'\*\*(.*?)\*\*', r'\1', line_str)
+        line_str = re.sub(r'\*(.*?)\*', r'\1', line_str)
+        line_str = re.sub(r'^#+\s*', '', line_str)
+        # Clean HTML tags like <br/>
+        line_str = re.sub(r'<[^>]+>', ' ', line_str)
+        
+        cleaned_lines.append(line_str)
+        
+    return " | ".join(cleaned_lines)
 
 # ==========================================
 # 2. PYDANTIC SCHEMAS & STATE
