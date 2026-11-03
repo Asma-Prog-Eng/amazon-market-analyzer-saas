@@ -75,27 +75,20 @@ def clean_for_reportlab(text: str) -> str:
     if not text:
         return ""
     
-    # Comprehensive replacement for non-breaking hyphens, soft hyphens, and all dash/bullet variations
     dash_variants = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u00ad']
     for char in dash_variants:
         text = text.replace(char, '-')
         
-    # Replace smart quotes and apostrophes
     for char in ['\u2018', '\u2019', '\u201a', '\u201b']:
         text = text.replace(char, "'")
     for char in ['\u201c', '\u201d', '\u201e', '\u201f']:
         text = text.replace(char, '"')
         
-    # Replace special whitespace characters
     text = text.replace('\u00a0', ' ').replace('\u202f', ' ')
 
-    # Replace markdown bold **text** with ReportLab XML <b>text</b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    # Replace any form of <br> with strict ReportLab self-closing <br/>
     text = re.sub(r'<\s*br\s*/?\s*>', '<br/>', text, flags=re.IGNORECASE)
-    # Strip unsupported HTML tags, keeping only safe formatting tags
     text = re.sub(r'</?\s*(?!b|i|u|br)\w+\b[^>]*>', '', text, flags=re.IGNORECASE)
-    # Escape standalone bare ampersands
     text = re.sub(r'&(?!amp;|lt;|gt;|quot;|apos;)', '&amp;', text)
     return text
 
@@ -275,10 +268,10 @@ def _build_reportlab_table(raw_rows, header_style, cell_style):
     ]))
     return t
 
-def generate_csv(data: MarketAnalysis) -> str:
-    """Generates a clean, structured CSV formatted report for Excel."""
+def generate_csv(data: MarketAnalysis) -> bytes:
+    """Generates a clean, structured CSV formatted bytes object with UTF-8 BOM for Excel."""
     output = StringIO()
-    writer = csv.writer(output)
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
     writer.writerow(["Report Section", "Content Details"])
     writer.writerow(["Product Name", data.product_name])
     writer.writerow(["Estimated Price Range", data.price_range])
@@ -288,7 +281,9 @@ def generate_csv(data: MarketAnalysis) -> str:
     
     clean_strategy = data.pricing_strategy.replace('\n', ' -- ')
     writer.writerow(["Pricing & Margin Strategy", clean_strategy])
-    return output.getvalue()
+    
+    # Encode with utf-8-sig (BOM) so Excel natively reads UTF-8 and respects cell borders
+    return output.getvalue().encode('utf-8-sig')
 
 
 # ==========================================
@@ -386,10 +381,10 @@ if "current_analysis" in st.session_state:
             use_container_width=True
         )
         
-        csv_data = generate_csv(data)
+        csv_bytes = generate_csv(data)
         st.download_button(
             label="📊 Download CSV Data (Excel-friendly)",
-            data=csv_data,
+            data=csv_bytes,
             file_name=f"{data.product_name.replace(' ', '_')}_market_report.csv",
             mime="text/csv",
             use_container_width=True
