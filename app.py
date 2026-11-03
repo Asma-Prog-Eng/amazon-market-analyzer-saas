@@ -263,3 +263,87 @@ st.subheader("Multi-Agent Intelligence Platform Powered by LangGraph & Groq")
 # Sidebar Configuration
 st.sidebar.header("🔑 Credentials & Settings")
 default_key = os.environ.get("GROQ_API_KEY", "")
+groq_api_key = st.sidebar.text_input("Groq API Key", value=default_key, type="password")
+
+if groq_api_key:
+    os.environ["GROQ_API_KEY"] = groq_api_key
+
+# Historical Reports Accordion in Sidebar
+st.sidebar.markdown("---")
+st.sidebar.header("📜 Saved Reports History")
+history_rows = fetch_history()
+if history_rows:
+    for row in history_rows[:5]:
+        st.sidebar.caption(f"**ID #{row[0]}** | {row[1][:10]} | {row[2]}")
+else:
+    st.sidebar.caption("No archived reports found.")
+
+# Main Form Input
+search_query = st.text_input("Product Search Query", placeholder="e.g. Wireless Ergonomic Mouse, Mechanical Keyboard, Foam Roller")
+
+if st.button("Run Market Analysis", type="primary"):
+    if not groq_api_key:
+        st.error("Please enter a valid Groq API Key in the sidebar or Streamlit secrets to proceed.")
+    elif not search_query.strip():
+        st.warning("Please enter a product search query.")
+    else:
+        with st.spinner("Executing 3-Node Agent Workflow (Scraper -> Analyzer -> Pricing Strategist)..."):
+            try:
+                graph = build_workflow()
+                initial_state = AgentState(search_query=search_query)
+                final_output = graph.invoke(initial_state)
+                analysis: MarketAnalysis = final_output["analysis"]
+                
+                # Save into DB
+                save_report_to_db(analysis)
+                st.session_state["current_analysis"] = analysis
+                st.success("Analysis complete and archived to database!")
+                
+            except Exception as e:
+                st.error(f"Error executing agent workflow: {str(e)}")
+
+# Display Results if available in session state
+if "current_analysis" in st.session_state:
+    data: MarketAnalysis = st.session_state["current_analysis"]
+    
+    st.markdown("---")
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header(f"📊 Market Report: {data.product_name}")
+        st.markdown(f"**Estimated Price Range:** `{data.price_range}`")
+        
+        st.subheader("✅ Key Pros")
+        for pro in data.pros:
+            st.markdown(f"- {pro}")
+            
+        st.subheader("⚠️ Key Cons & Market Gaps")
+        for con in data.cons:
+            st.markdown(f"- {con}")
+            
+        st.subheader("💡 Strategic Recommendation")
+        st.info(data.recommendation)
+        
+        st.subheader("🎯 Pricing & Margin Strategy")
+        st.markdown(data.pricing_strategy)
+        
+    with col2:
+        st.header("📥 Export Market Report")
+        
+        pdf_bytes = generate_pdf(data)
+        st.download_button(
+            label="📄 Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{data.product_name.replace(' ', '_')}_market_report.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+        
+        csv_data = generate_csv(data)
+        st.download_button(
+            label="📊 Download CSV Data",
+            data=csv_data,
+            file_name=f"{data.product_name.replace(' ', '_')}_market_report.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
