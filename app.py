@@ -395,3 +395,130 @@ if groq_api_key:
 
 # Target Market Selector
 st.sidebar.markdown("---")
+st.sidebar.header("🌍 Target Market")
+target_market = st.sidebar.selectbox(
+    "Select region/marketplace:",
+    ["US (Amazon.com)", "Germany (Amazon.de)", "Emirates (Amazon.ae)", "Saudi Arabia (Amazon.sa)"]
+)
+
+# Quick Trending Niche Picker
+st.sidebar.markdown("---")
+st.sidebar.header("🚀 Quick Trending Niches")
+preset_niche = st.sidebar.selectbox(
+    "Select to auto-fill query:",
+    ["-- Custom Input --", "Wireless Ergonomic Mouse", "Smart Plant Waterer", "Posture Correction Brace", "Portable Blender Bottle"]
+)
+
+# Historical Reports Accordion in Sidebar
+st.sidebar.markdown("---")
+st.sidebar.header("📜 Saved Reports History")
+history_rows = fetch_history()
+if history_rows:
+    for row in history_rows[:5]:
+        r_id = row[0]
+        r_time = str(row[1])[:10] if row[1] else "N/A"
+        r_prod = row[2] if len(row) > 2 and row[2] else "Unknown"
+        r_score = row[4] if len(row) > 4 and row[4] is not None else "??"
+        r_win = "🚀" if len(row) > 5 and row[5] else ""
+        st.sidebar.caption(f"**ID #{r_id}** {r_win} ({r_score}/100) | {r_prod}")
+else:
+    st.sidebar.caption("No archived reports found.")
+
+# Main Form Input
+default_query = preset_niche if preset_niche != "-- Custom Input --" else ""
+search_query = st.text_input("Product Search Query", value=default_query, placeholder="e.g. Wireless Ergonomic Mouse, Mechanical Keyboard")
+
+if st.button("Run Winning Product Analysis", type="primary"):
+    if not groq_api_key:
+        st.error("Please enter a valid Groq API Key in the sidebar or Streamlit secrets to proceed.")
+    elif not search_query.strip():
+        st.warning("Please enter a product search query.")
+    else:
+        with st.spinner(f"Executing 4-Node Agent Workflow for {target_market}..."):
+            try:
+                graph = build_workflow()
+                initial_state = AgentState(search_query=search_query, target_market=target_market)
+                final_output = graph.invoke(initial_state)
+                analysis: MarketAnalysis = final_output["analysis"]
+                
+                save_report_to_db(analysis)
+                st.session_state["current_analysis"] = analysis
+                st.session_state["target_market"] = target_market
+                st.success(f"Analysis for {target_market} complete, sourcing blueprint generated, and archived!")
+                
+            except Exception as e:
+                st.error(f"Error executing agent workflow: {str(e)}")
+
+# Display Results if available in session state
+if "current_analysis" in st.session_state:
+    data: MarketAnalysis = st.session_state["current_analysis"]
+    current_market = st.session_state.get("target_market", target_market)
+    
+    st.markdown("---")
+    
+    if data.is_winning_product:
+        st.success(f"🚀 **WINNING PRODUCT DETECTED FOR {current_market.upper()}!** Viability Score: **{data.viability_score}/100** — High profit potential and clear market gap identified.")
+    else:
+        st.warning(f"⚠️ **Moderate Niche in {current_market}.** Viability Score: **{data.viability_score}/100** — Exercise caution or look for stronger differentiation.")
+
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header(f"📊 Market Report: {data.product_name}")
+        st.markdown(f"**Target Marketplace:** `{current_market}`")
+        st.markdown(f"**Estimated Price Range:** `{data.price_range}`")
+        
+        st.subheader("✅ Key Pros")
+        for pro in data.pros:
+            st.markdown(f"- {pro}")
+            
+        st.subheader("⚠️ Key Cons & Market Gaps")
+        for con in data.cons:
+            st.markdown(f"- {con}")
+            
+        st.subheader("💡 Strategic Recommendation")
+        st.info(data.recommendation)
+        
+        st.subheader("🎯 Pricing & Margin Strategy")
+        st.markdown(data.pricing_strategy)
+        
+        st.subheader("🏭 Alibaba & AliExpress Sourcing & Compliance Blueprint")
+        st.markdown(data.sourcing_info)
+        
+        # Native, bulletproof Streamlit Clickable Action Buttons for Sourcing
+        st.markdown("#### 🔗 Direct Supplier Search Shortcuts")
+        q_encoded = requests.utils.quote(data.product_name)
+        bcol1, bcol2 = st.columns(2)
+        with bcol1:
+            st.link_button(
+                "🔍 Search Alibaba", 
+                f"https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&SearchText={q_encoded}",
+                use_container_width=True
+            )
+        with bcol2:
+            st.link_button(
+                "🛒 Search AliExpress", 
+                f"https://www.aliexpress.com/w/wholesale-{q_encoded}.html",
+                use_container_width=True
+            )
+        
+    with col2:
+        st.header("📥 Export Market Report")
+        
+        pdf_bytes = generate_pdf(data, current_market)
+        st.download_button(
+            label="📄 Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{data.product_name.replace(' ', '_')}_{current_market[:2]}_report.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+        
+        csv_bytes = generate_csv(data, current_market)
+        st.download_button(
+            label="📊 Download CSV Data (Excel-friendly)",
+            data=csv_bytes,
+            file_name=f"{data.product_name.replace(' ', '_')}_{current_market[:2]}_report.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
