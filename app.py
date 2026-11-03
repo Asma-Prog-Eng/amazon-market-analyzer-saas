@@ -45,6 +45,7 @@ def init_db():
         """)
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS viability_score INT;")
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_winning_product BOOLEAN;")
+        cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS sourcing_info TEXT;")
         
         conn.commit()
         cursor.close()
@@ -53,15 +54,15 @@ def init_db():
         st.error(f"Database initialization error: {e}")
 
 def save_report_to_db(data: "MarketAnalysis"):
-    """Saves a market analysis report and winning metrics into the cloud PostgreSQL database."""
+    """Saves a market analysis report and sourcing metrics into the cloud PostgreSQL database."""
     if not DB_URL:
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO reports (product_name, price_range, pros, cons, recommendation, pricing_strategy, viability_score, is_winning_product, sourcing_info)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             data.product_name,
             data.price_range,
@@ -70,7 +71,8 @@ def save_report_to_db(data: "MarketAnalysis"):
             data.recommendation,
             data.pricing_strategy,
             data.viability_score,
-            data.is_winning_product
+            data.is_winning_product,
+            data.sourcing_info
         ))
         conn.commit()
         cursor.close()
@@ -98,7 +100,6 @@ def clean_for_reportlab(text: str) -> str:
     if not text:
         return ""
     
-    # Strip LaTeX math tokens and symbols that break ReportLab parser
     text = re.sub(r'\$(.*?)\$', r'\1', text)
     text = text.replace(r'\pm', '+/-')
     text = text.replace(r'\%', '%')
@@ -157,7 +158,7 @@ def clean_for_csv(text: str) -> str:
 
 
 # ==========================================
-# 2. PYDANTIC SCHEMAS & STATE (WITH WINNING METRICS)
+# 2. PYDANTIC SCHEMAS & STATE
 # ==========================================
 class MarketAnalysis(BaseModel):
     product_name: str = Field(description="Name or category of the analyzed product")
@@ -168,6 +169,7 @@ class MarketAnalysis(BaseModel):
     pricing_strategy: str = Field(description="Detailed pricing strategy, margins, and tier structure")
     viability_score: int = Field(description="Calculated score from 1 to 100 assessing overall market viability and winning product potential")
     is_winning_product: bool = Field(description="True if the product has strong profit margins, high demand, and fixable consumer complaints; false otherwise")
+    sourcing_info: str = Field(default="", description="Alibaba/AliExpress search queries, direct sourcing links, and manufacturing upgrade recommendations based on product cons")
 
 class AgentState(BaseModel):
     search_query: str
@@ -176,7 +178,7 @@ class AgentState(BaseModel):
 
 
 # ==========================================
-# 3. LANGGRAPH 3-NODE PIPELINE
+# 3. LANGGRAPH 4-NODE PIPELINE
 # ==========================================
 def node_scraper(state: AgentState) -> dict:
     """Node 1: Scrapes search results / web content for the query."""
@@ -206,7 +208,7 @@ Analyze the following market research text for query: '{state.search_query}'.
 Scraped Content:
 {state.scraped_content}
 
-CRITICAL INSTRUCTION: If the query is broad (like 'Kitchen' or 'Fitness'), select the single most prominent, trending product category or item within that space to analyze deeply. Do not try to list multiple products.
+CRITICAL INSTRUCTION: If the query is broad, select the single most prominent, trending product category or item within that space to analyze deeply.
 
 Provide a structured analysis containing:
 1. Product name/category (specific item)
@@ -215,8 +217,8 @@ Provide a structured analysis containing:
 4. Top 3-5 cons/complaints/gaps (look for fixable product flaws)
 5. Strategic recommendation
 6. Initial baseline pricing approach
-7. Viability score (1-100 scale based on market demand, profit potential, and lack of unbeatable dominant brands)
-8. Boolean flag (true/false) determining if this is a high-potential winning product
+7. Viability score (1-100 scale)
+8. Boolean flag determining if this is a high-potential winning product
 """
     result = structured_llm.invoke(prompt)
     return {"analysis": result}
@@ -232,23 +234,45 @@ Existing Pros: {', '.join(state.analysis.pros)}
 Existing Cons: {', '.join(state.analysis.cons)}
 
 Write a comprehensive pricing strategy. Format key data points into a clean Markdown table with columns: | Element | Recommendation | Rationale |.
-Follow the table with a few short bullet points for Quick Action Steps. Avoid using LaTeX math symbols or dollar signs for math formatting.
+Follow the table with a few short bullet points for Quick Action Steps. Avoid LaTeX math symbols.
 """
     res = llm.invoke(prompt)
     state.analysis.pricing_strategy = res.content
     return {"analysis": state.analysis}
 
+def node_sourcing_finder(state: AgentState) -> dict:
+    """Node 4: Generates Alibaba/AliExpress sourcing advice, search links, and manufacturing fixes based on Cons."""
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3)
+    
+    cons_text = ', '.join(state.analysis.cons)
+    prompt = f"""You are an expert Global Sourcing & Supply Chain Manager for e-commerce.
+Target Product: '{state.analysis.product_name}'
+Identified Customer Complaints/Cons to Fix: {cons_text}
+
+Provide an actionable Sourcing & Supplier Blueprint containing:
+1. **Top Alibaba Search Keywords**: 3-4 precise English and industry search terms.
+2. **Direct Sourcing Search Links**: Markdown hyperlinks formatted as `[Search Alibaba for Product Name](https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&SearchText=QUERY)` and `[Search AliExpress for Product Name](https://www.aliexpress.com/w/wholesale-QUERY.html)`.
+3. **Supplier Quality Upgrades**: Specific manufacturing instructions to give Chinese suppliers to fix the identified customer complaints (e.g., thicker material, upgraded stitching, reinforced hinge).
+
+Format your response cleanly with markdown headers and bullet points.
+"""
+    res = llm.invoke(prompt)
+    state.analysis.sourcing_info = res.content
+    return {"analysis": state.analysis}
+
 def build_workflow():
-    """Builds and compiles the 3-node LangGraph execution graph."""
+    """Builds and compiles the 4-node LangGraph execution graph."""
     workflow = StateGraph(AgentState)
     workflow.add_node("scraper", node_scraper)
     workflow.add_node("analyzer", node_analyzer)
     workflow.add_node("strategist", node_pricing_strategist)
+    workflow.add_node("sourcing", node_sourcing_finder)
 
     workflow.add_edge(START, "scraper")
     workflow.add_edge("scraper", "analyzer")
     workflow.add_edge("analyzer", "strategist")
-    workflow.add_edge("strategist", END)
+    workflow.add_edge("strategist", "sourcing")
+    workflow.add_edge("sourcing", END)
 
     return workflow.compile()
 
@@ -291,54 +315,19 @@ def generate_pdf(data: MarketAnalysis) -> bytes:
     story.append(Spacer(1, 6))
     
     story.append(Paragraph("Pricing & Margin Strategy:", h2_style))
+    for line in data.pricing_strategy.split('\n'):
+        if line.strip():
+            story.append(Paragraph(clean_for_reportlab(line), body_style))
+    story.append(Spacer(1, 6))
     
-    strategy_lines = data.pricing_strategy.split('\n')
-    table_rows = []
-    
-    for line in strategy_lines:
-        line_str = line.strip()
-        if not line_str:
-            continue
-        if line_str.startswith('|') and line_str.endswith('|'):
-            cells = [c.strip() for c in line_str.split('|')[1:-1]]
-            if all(re.match(r'^[\-\:]+$', c) for c in cells if c):
-                continue
-            table_rows.append(cells)
-        else:
-            if table_rows:
-                story.append(_build_reportlab_table(table_rows, table_header_style, table_cell_style))
-                story.append(Spacer(1, 6))
-                table_rows = []
-            story.append(Paragraph(clean_for_reportlab(line_str), body_style))
-            story.append(Spacer(1, 2))
+    story.append(Paragraph("Alibaba & AliExpress Sourcing Blueprint:", h2_style))
+    for line in data.sourcing_info.split('\n'):
+        if line.strip():
+            story.append(Paragraph(clean_for_reportlab(line), body_style))
             
-    if table_rows:
-        story.append(_build_reportlab_table(table_rows, table_header_style, table_cell_style))
-    
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
-
-def _build_reportlab_table(raw_rows, header_style, cell_style):
-    """Helper to format rows into a styled ReportLab Table object."""
-    formatted_data = []
-    for i, row in enumerate(raw_rows):
-        formatted_row = []
-        for cell in row:
-            p_style = header_style if i == 0 else cell_style
-            formatted_row.append(Paragraph(clean_for_reportlab(cell), p_style))
-        formatted_data.append(formatted_row)
-        
-    t = Table(formatted_data, colWidths=[120, 160, 260])
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#bdc3c7')),
-    ]))
-    return t
 
 def generate_csv(data: MarketAnalysis) -> bytes:
     """Generates a clean, semicolon-delimited CSV bytes object with UTF-8 BOM for Excel compatibility."""
@@ -353,7 +342,8 @@ def generate_csv(data: MarketAnalysis) -> bytes:
     writer.writerow(["Key Pros", " \n ".join([clean_for_csv(p) for p in data.pros])])
     writer.writerow(["Key Cons", " \n ".join([clean_for_csv(c) for c in data.cons])])
     writer.writerow(["Strategic Recommendation", clean_for_csv(data.recommendation)])
-    writer.writerow(["Pricing & Margin Strategy", clean_for_csv(data.pricing_strategy)])
+    writer.writerow(["Pricing Strategy", clean_for_csv(data.pricing_strategy)])
+    writer.writerow(["Sourcing Blueprint", clean_for_csv(data.sourcing_info)])
     
     return output.getvalue().encode('utf-8-sig')
 
@@ -413,7 +403,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
     elif not search_query.strip():
         st.warning("Please enter a product search query.")
     else:
-        with st.spinner("Executing 3-Node Agent Workflow & Scoring Product Viability..."):
+        with st.spinner("Executing 4-Node Agent Workflow (Scraper -> Analyzer -> Strategist -> Sourcing Finder)..."):
             try:
                 graph = build_workflow()
                 initial_state = AgentState(search_query=search_query)
@@ -422,7 +412,7 @@ if st.button("Run Winning Product Analysis", type="primary"):
                 
                 save_report_to_db(analysis)
                 st.session_state["current_analysis"] = analysis
-                st.success("Analysis complete and archived to Supabase database!")
+                st.success("Analysis complete, suppliers mapped, and archived to Supabase database!")
                 
             except Exception as e:
                 st.error(f"Error executing agent workflow: {str(e)}")
@@ -458,6 +448,9 @@ if "current_analysis" in st.session_state:
         
         st.subheader("🎯 Pricing & Margin Strategy")
         st.markdown(data.pricing_strategy)
+        
+        st.subheader("🏭 Alibaba & AliExpress Sourcing Blueprint")
+        st.markdown(data.sourcing_info)
         
     with col2:
         st.header("📥 Export Market Report")
