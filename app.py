@@ -31,7 +31,6 @@ def init_db():
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        # Create base table if it doesn't exist at all
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY,
@@ -44,7 +43,6 @@ def init_db():
                 pricing_strategy TEXT
             )
         """)
-        # Safely add new columns if upgrading an existing table
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS viability_score INT;")
         cursor.execute("ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_winning_product BOOLEAN;")
         
@@ -202,8 +200,10 @@ Analyze the following market research text for query: '{state.search_query}'.
 Scraped Content:
 {state.scraped_content}
 
+CRITICAL INSTRUCTION: If the query is broad (like 'Kitchen' or 'Fitness'), select the single most prominent, trending product category or item within that space to analyze deeply. Do not try to list multiple products.
+
 Provide a structured analysis containing:
-1. Product name/category
+1. Product name/category (specific item)
 2. Estimated price range
 3. Top 3-5 pros/strengths
 4. Top 3-5 cons/complaints/gaps (look for fixable product flaws)
