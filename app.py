@@ -268,13 +268,16 @@ groq_api_key = st.sidebar.text_input("Groq API Key", value=default_key, type="pa
 if groq_api_key:
     os.environ["GROQ_API_KEY"] = groq_api_key
 
-# Historical Reports Accordion in Sidebar
+# Historical Reports Accordion in Sidebar (with safe None-checks)
 st.sidebar.markdown("---")
 st.sidebar.header("📜 Saved Reports History")
 history_rows = fetch_history()
 if history_rows:
     for row in history_rows[:5]:
-        st.sidebar.caption(f"**ID #{row[0]}** | {row[1][:10]} | {row[2]}")
+        r_id = row[0]
+        r_time = str(row[1])[:10] if row[1] else "N/A"
+        r_prod = row[2] if len(row) > 2 and row[2] else "Unknown Product"
+        st.sidebar.caption(f"**ID #{r_id}** | {r_time} | {r_prod}")
 else:
     st.sidebar.caption("No archived reports found.")
 
